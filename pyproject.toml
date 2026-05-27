@@ -1,0 +1,205 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "one-direction"
+version = "0.1.0"
+description = "GNN-enhanced HMM map matching over OpenStreetMap road graphs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "One-Direction Contributors" }
+]
+keywords = [
+  "map-matching",
+  "openstreetmap",
+  "gnn",
+  "hmm",
+  "viterbi",
+  "geospatial",
+  "trajectory",
+  "road-network"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: GIS"
+]
+
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "scikit-learn>=1.3",
+
+  "shapely>=2.0",
+  "pyproj>=3.6",
+  "geopandas>=0.14",
+  "fiona>=1.9",
+  "rtree>=1.0",
+  "pyogrio>=0.7",
+
+  "osmnx>=1.9",
+  "networkx>=3.1",
+  "pyrosm>=0.6.2",
+  "osmium>=3.7",
+
+  "pyarrow>=14.0",
+  "fastparquet>=2023.10",
+
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "torchaudio>=2.2",
+  "torch-geometric>=2.5",
+
+  "tqdm>=4.66",
+  "PyYAML>=6.0",
+  "joblib>=1.3",
+  "tensorboard>=2.15",
+
+  "matplotlib>=3.7",
+  "seaborn>=0.13",
+  "folium>=0.15",
+  "plotly>=5.18",
+
+  "typer>=0.9",
+  "rich>=13.7",
+  "loguru>=0.7"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "black>=23.0",
+  "ruff>=0.1",
+  "isort>=5.12",
+  "mypy>=1.8",
+  "pre-commit>=3.5"
+]
+
+notebooks = [
+  "jupyter>=1.0",
+  "ipykernel>=6.25",
+  "notebook>=7.0"
+]
+
+[project.urls]
+Repository = "https://github.com/<your-org>/One-Direction"
+Issues = "https://github.com/<your-org>/One-Direction/issues"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = [
+  "data*",
+  "outputs*",
+  "notebooks*",
+  "tests*",
+  "scripts*"
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+include = "\\.pyi?$"
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | env
+  | build
+  | dist
+  | data
+  | outputs
+  | notebooks
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "build",
+  "dist",
+  "data",
+  "outputs",
+  "notebooks"
+]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "B",
+  "UP",
+  "C4",
+  "SIM"
+]
+ignore = [
+  "E501"
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config"
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+  "tests/*",
+  "scripts/*",
+  "notebooks/*"
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+  "data/",
+  "outputs/",
+  "notebooks/",
+  "build/",
+  "dist/"
+]

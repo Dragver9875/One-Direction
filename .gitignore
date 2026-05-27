@@ -1,0 +1,191 @@
+# ============================================================
+# One-Direction .gitignore
+# GNN-HMM map matching over OpenStreetMap road graphs
+# ============================================================
+
+# ----------------------------
+# Python cache / bytecode
+# ----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ----------------------------
+# Virtual environments
+# ----------------------------
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda-env/
+*.egg-info/
+
+# ----------------------------
+# Build artifacts
+# ----------------------------
+build/
+dist/
+.eggs/
+*.egg
+pip-wheel-metadata/
+wheelhouse/
+
+# ----------------------------
+# Python tooling caches
+# ----------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# ----------------------------
+# Jupyter notebooks
+# ----------------------------
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ----------------------------
+# IDE / editor files
+# ----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+Thumbs.db
+
+# ----------------------------
+# Logs
+# ----------------------------
+*.log
+logs/
+log/
+wandb/
+mlruns/
+runs/
+lightning_logs/
+tensorboard/
+
+# ----------------------------
+# Environment variables / secrets
+# ----------------------------
+.env
+.env.*
+!.env.example
+secrets.yaml
+secrets.yml
+credentials.json
+token.json
+*.pem
+*.key
+
+# ----------------------------
+# Raw and processed data
+# Keep directory placeholders, ignore heavy data files.
+# ----------------------------
+data/raw/**
+data/interim/**
+data/processed/**
+data/reports/**
+
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/reports/.gitkeep
+
+# ----------------------------
+# OSM / geospatial large files
+# ----------------------------
+*.osm
+*.osm.pbf
+*.pbf
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.gpkg
+*.geojson
+*.kml
+*.kmz
+
+# ----------------------------
+# Parquet / tensor / serialized data
+# ----------------------------
+*.parquet
+*.feather
+*.arrow
+*.pt
+*.pth
+*.pkl
+*.pickle
+*.joblib
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# ----------------------------
+# Model outputs
+# ----------------------------
+outputs/**
+!outputs/.gitkeep
+
+checkpoints/
+*.ckpt
+*.onnx
+*.engine
+*.trt
+*.safetensors
+
+# ----------------------------
+# Generated figures and reports
+# ----------------------------
+figures/
+plots/
+reports/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.svg
+*.pdf
+
+# ----------------------------
+# Temporary files
+# ----------------------------
+tmp/
+temp/
+.tmp/
+*.tmp
+*.bak
+*.old
+
+# ----------------------------
+# OS-specific files
+# ----------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# ----------------------------
+# Optional local configs
+# ----------------------------
+configs/local.yaml
+configs/local.yml
+configs/debug.yaml
+configs/debug.yml

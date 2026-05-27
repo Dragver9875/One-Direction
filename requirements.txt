@@ -1,0 +1,80 @@
+# ============================================================
+# One-Direction requirements.txt
+# GNN-HMM map matching over OpenStreetMap road graphs
+# ============================================================
+
+# ----------------------------
+# Core scientific stack
+# ----------------------------
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.3
+
+# ----------------------------
+# Geospatial processing
+# ----------------------------
+shapely>=2.0
+pyproj>=3.6
+geopandas>=0.14
+fiona>=1.9
+rtree>=1.0
+pyogrio>=0.7
+
+# ----------------------------
+# OSM parsing / road graph tools
+# ----------------------------
+osmnx>=1.9
+networkx>=3.1
+pyrosm>=0.6.2
+osmium>=3.7
+
+# ----------------------------
+# Data storage
+# ----------------------------
+pyarrow>=14.0
+fastparquet>=2023.10
+
+# ----------------------------
+# Deep learning
+# ----------------------------
+torch>=2.2
+torchvision>=0.17
+torchaudio>=2.2
+torch-geometric>=2.5
+
+# ----------------------------
+# Training utilities
+# ----------------------------
+tqdm>=4.66
+PyYAML>=6.0
+joblib>=1.3
+tensorboard>=2.15
+
+# ----------------------------
+# Visualization
+# ----------------------------
+matplotlib>=3.7
+seaborn>=0.13
+folium>=0.15
+plotly>=5.18
+
+# ----------------------------
+# CLI / config / logging
+# ----------------------------
+typer>=0.9
+rich>=13.7
+loguru>=0.7
+
+# ----------------------------
+# Testing
+# ----------------------------
+pytest>=7.4
+pytest-cov>=4.1
+
+# ----------------------------
+# Code quality
+# ----------------------------
+black>=23.0
+ruff>=0.1
+isort>=5.12

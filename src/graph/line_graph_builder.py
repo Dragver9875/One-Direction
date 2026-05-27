@@ -49,9 +49,30 @@ def _read_edge_table(path: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported edge_table format: {path}")
 
 
+def _json_default(value):
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, np.integer):
+        return int(value)
+
+    if isinstance(value, np.floating):
+        return float(value)
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return value.detach().cpu().item()
+        return value.detach().cpu().tolist()
+
+    return str(value)
+
+
 def _save_json(data: dict, path: Path) -> None:
     with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, default=_json_default)
 
 
 def build_line_graph(cfg: LineGraphBuildConfig) -> Dict[str, Path]:

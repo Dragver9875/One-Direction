@@ -24,9 +24,7 @@ Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-st
 
 For each vehicle observation:
 
-$$
-z_t = (x_t, y_t, \psi_t)
-$$
+$$ z_t = (x_t, y_t, \psi_t) $$
 
 where:
 
@@ -36,9 +34,7 @@ where:
 
 The goal is to predict:
 
-$$
-\hat{y}_t = (e_t, p_t, c_t)
-$$
+$$ \hat{y}_t = (e_t, p_t, c_t) $$
 
 where:
 
@@ -48,16 +44,7 @@ where:
 
 The final matched path is obtained by solving:
 
-$$
-\hat{e}_{1:T}
-=
-\arg\max_{e_{1:T}}
-\left[
-\sum_{t=1}^{T} E_\theta(z_t, e_t)
-+
-\sum_{t=2}^{T} T_\phi(e_{t-1}, e_t, z_{t-1}, z_t)
-\right]
-$$
+$$ \hat{e}*{1:T} = \arg\max*{e_{1:T}} \left[ \sum_{t=1}^{T} E_\theta(z_t, e_t) + \sum_{t=2}^{T} T_\phi(e_{t-1}, e_t, z_{t-1}, z_t) \right] $$
 
 where:
 
@@ -463,9 +450,7 @@ Line graph:
 
 This representation is central to the model because the hidden HMM state is a road segment:
 
-$$
-s_t = e_t
-$$
+$$ s_t = e_t $$
 
 Therefore, every line-graph node corresponds directly to one possible hidden state.
 
@@ -507,15 +492,11 @@ Using sine and cosine avoids angle wraparound errors.
 
 For every vehicle observation:
 
-$$
-z_t = (x_t, y_t, \psi_t)
-$$
+$$ z_t = (x_t, y_t, \psi_t) $$
 
 One-Direction finds a set of candidate road segments:
 
-$$
-C_t = \{e_{t,1}, e_{t,2}, \ldots, e_{t,k}\}
-$$
+$$ C_t = {e_{t,1}, e_{t,2}, \ldots, e_{t,k}} $$
 
 Recommended first configuration:
 
@@ -586,9 +567,7 @@ segment_features.pt
 
 The encoder computes a road-segment embedding for every directed segment:
 
-$$
-h_e = \operatorname{GNN}(x_e, G_{\text{line}})
-$$
+$$ h_e = \mathrm{GNN}(x_e, G_{\text{line}}) $$
 
 where:
 
@@ -621,35 +600,19 @@ How well does GPS/yaw observation z_t match candidate road segment $e$?
 
 For each candidate pair $(z_t, e)$, build:
 
-$$
-r_{t,e}
-=
-\begin{bmatrix}
-h_e \\
-d(z_t,e) \\
-\Delta\psi(z_t,e) \\
-\operatorname{offset}(z_t,e) \\
-\operatorname{speed}_t \\
-\sin(\psi_t) \\
-\cos(\psi_t) \\
-\sin(\theta_e) \\
-\cos(\theta_e)
-\end{bmatrix}
-$$
+$$ r_{t,e} = \begin{bmatrix} h_e \ d(z_t,e) \ \Delta\psi(z_t,e) \ \mathrm{offset}(z_t,e) \ \mathrm{speed}_t \ \sin(\psi_t) \ \cos(\psi_t) \ \sin(\theta_e) \ \cos(\theta_e) \end{bmatrix} $$
 
 where:
 
 * $h_e$ is the road-segment embedding.
 * $d(z_t,e)$ is the perpendicular distance from the vehicle point to the segment.
 * $\Delta\psi(z_t,e)$ is the yaw difference.
-* $\operatorname{offset}(z_t,e)$ is the projected offset along the segment.
+* $\mathrm{offset}(z_t,e)$ is the projected offset along the segment.
 * $\theta_e$ is the road-segment bearing.
 
 The emission score is:
 
-$$
-E_\theta(z_t,e) = \operatorname{MLP}_{\text{emission}}(r_{t,e})
-$$
+$$ E_\theta(z_t,e) = \mathrm{MLP}*{\text{emission}}(r*{t,e}) $$
 
 ---
 
@@ -663,30 +626,11 @@ How plausible is it to move from road segment $e_i$ at timestep t-1 to road segm
 
 For each candidate transition $(e_i, e_j)$, build:
 
-$$
-q_{i,j,t}
-=
-\begin{bmatrix}
-h_i \\
-h_j \\
-d_{\text{gps}} \\
-d_{\text{route}} \\
-\lvert d_{\text{route}} - d_{\text{gps}} \rvert \\
-\operatorname{turn\_angle} \\
-\operatorname{yaw\_change} \\
-\operatorname{speed\_consistency} \\
-\operatorname{is\_connected} \\
-\operatorname{is\_legal}
-\end{bmatrix}
-$$
+$$ q_{i,j,t} = \begin{bmatrix} h_i \ h_j \ d_{\text{gps}} \ d_{\text{route}} \ \lvert d_{\text{route}} - d_{\text{gps}} \rvert \ \mathrm{turn_angle} \ \mathrm{yaw_change} \ \mathrm{speed_consistency} \ \mathrm{is_connected} \ \mathrm{is_legal} \end{bmatrix} $$
 
 The transition score is:
 
-$$
-T_\phi(e_i,e_j,z_{t-1},z_t)
-=
-\operatorname{MLP}_{\text{transition}}(q_{i,j,t})
-$$
+$$ T_\phi(e_i,e_j,z_{t-1},z_t) = \mathrm{MLP}*{\text{transition}}(q*{i,j,t}) $$
 
 Hard constraints are still enforced even though the transition score is learned.
 
@@ -724,50 +668,21 @@ transition scores:
 
 The decoder solves:
 
-$$
-\hat{e}_{1:T}
-=
-\arg\max_{e_t \in C_t}
-\left[
-\sum_{t=1}^{T} E_t(e_t)
-+
-\sum_{t=2}^{T} T_t(e_{t-1}, e_t)
-\right]
-$$
+$$ \hat{e}*{1:T} = \arg\max*{e_t \in C_t} \left[ \sum_{t=1}^{T} E_t(e_t) + \sum_{t=2}^{T} T_t(e_{t-1}, e_t) \right] $$
 
 Viterbi recurrence:
 
-$$
-V_1(e) = E_1(e)
-$$
+$$ V_1(e) = E_1(e) $$
 
-$$
-V_t(e)
-=
-E_t(e)
-+
-\max_{e' \in C_{t-1}}
-\left[
-V_{t-1}(e') + T_t(e',e)
-\right]
-$$
+$$ V_t(e) = E_t(e) + \max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e',e) \right] $$
 
 Backpointer:
 
-$$
-B_t(e)
-=
-\arg\max_{e' \in C_{t-1}}
-\left[
-V_{t-1}(e') + T_t(e',e)
-\right]
-$$
+$$ B_t(e) = \arg\max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e',e) \right] $$
 
 The final edge is:
 
-$$
-\hat{e}_T = \arg\max_e V_T(e)
-$$
+$$ \hat{e}_T = \arg\max_e V_T(e) $$
 
 Then the full matched sequence is recovered by backtracking through the backpointers.
 
@@ -779,9 +694,7 @@ One-Direction trains the emission and transition scores jointly.
 
 Given a ground-truth road-segment sequence:
 
-$$
-e_1^{\text{GT}}, e_2^{\text{GT}}, \ldots, e_T^{\text{GT}}
-$$
+$$ e_1^{\text{GT}}, e_2^{\text{GT}}, \ldots, e_T^{\text{GT}} $$
 
 The training objective contains two main terms:
 
@@ -796,18 +709,7 @@ The training objective contains two main terms:
 
 For each GPS observation, the model should rank the GT road segment above the other candidate segments:
 
-$$
-\mathcal{L}_{\text{emission}}
-=
--\sum_t
-\log
-\frac{
-\exp(E_t(e_t^{\text{GT}}))
-}{
-\sum_{e \in C_t}
-\exp(E_t(e))
-}
-$$
+$$ \mathcal{L}*{\text{emission}} = -\sum_t \log \frac{ \exp(E_t(e_t^{\text{GT}})) }{ \sum*{e \in C_t} \exp(E_t(e)) } $$
 
 ---
 
@@ -815,32 +717,13 @@ $$
 
 For each consecutive GT transition, the model should rank the correct next segment above alternative next candidates:
 
-$$
-\mathcal{L}_{\text{transition}}
-=
--\sum_{t=2}^{T}
-\log
-\frac{
-\exp(T_t(e_{t-1}^{\text{GT}},e_t^{\text{GT}}))
-}{
-\sum_{e \in C_t}
-\exp(T_t(e_{t-1}^{\text{GT}},e))
-}
-$$
+$$ \mathcal{L}*{\text{transition}} = -\sum*{t=2}^{T} \log \frac{ \exp(T_t(e_{t-1}^{\text{GT}},e_t^{\text{GT}})) }{ \sum_{e \in C_t} \exp(T_t(e_{t-1}^{\text{GT}},e)) } $$
 
 ---
 
 ### 11.3 Total loss
 
-$$
-\mathcal{L}
-=
-\mathcal{L}_{\text{emission}}
-+
-\lambda_T \mathcal{L}_{\text{transition}}
-+
-\lambda_R \lVert \Theta \rVert_2^2
-$$
+$$ \mathcal{L} = \mathcal{L}*{\text{emission}} + \lambda_T \mathcal{L}*{\text{transition}} + \lambda_R \lVert \Theta \rVert_2^2 $$
 
 Recommended first setting:
 

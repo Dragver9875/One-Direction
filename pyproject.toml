@@ -50,8 +50,6 @@ dependencies = [
 
   "osmnx>=1.9",
   "networkx>=3.1",
-  "pyrosm>=0.6.2",
-  "osmium>=3.7",
 
   "pyarrow>=14.0",
   "fastparquet>=2023.10",

@@ -273,14 +273,15 @@ One-Direction/
 │
 ├── scripts/
 │   ├── 01_prepare_trajectories.py
-│   ├── 02_build_osm_graph.py
-│   ├── 03_build_line_graph.py
-│   ├── 04_generate_candidates.py
-│   ├── 05_build_training_tensors.py
-│   ├── 06_train_gnn_hmm.py
-│   ├── 07_decode_gnn_hmm.py
-│   ├── 08_evaluate.py
-│   └── 09_visualize_errors.py
+|   ├── 02_prepare_gt_routes.py
+│   ├── 03_build_osm_graph.py
+│   ├── 04_build_line_graph.py
+│   ├── 05_generate_candidates.py
+│   ├── 06_build_training_tensors.py
+│   ├── 07_train_gnn_hmm.py
+│   ├── 08_decode_gnn_hmm.py
+│   ├── 09_evaluate.py
+│   └── 10_visualize_errors.py
 │
 ├── notebooks/
 │   ├── 01_inspect_trajectories.ipynb

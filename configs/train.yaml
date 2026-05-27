@@ -1,0 +1,98 @@
+training:
+  seed: 42
+  device: auto
+
+  dataset:
+    train: data/processed/tensors/train_dataset.pt
+    val: data/processed/tensors/val_dataset.pt
+    line_graph: data/processed/line_graph/line_graph.pt
+    segment_features: data/processed/line_graph/segment_features.pt
+
+  dataloader:
+    batch_size: 8
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+    drop_last: false
+
+  epochs: 50
+
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.0001
+    betas:
+      - 0.9
+      - 0.999
+    eps: 0.00000001
+
+  scheduler:
+    enabled: true
+    name: cosine
+    warmup_epochs: 3
+    min_lr: 0.00001
+
+  gradient:
+    clip_grad_norm: true
+    max_grad_norm: 5.0
+
+  precision:
+    amp: false
+    dtype: float32
+
+loss:
+  emission_weight: 1.0
+  transition_weight: 1.0
+  l2_weight: 0.0001
+
+  emission:
+    type: candidate_cross_entropy
+    ignore_missing_gt: true
+    label_smoothing: 0.0
+
+  transition:
+    type: transition_cross_entropy
+    negative_sampling: all_candidates
+    ignore_invalid_transitions: true
+
+  auxiliary:
+    candidate_recall_penalty: false
+    confidence_calibration_loss: false
+
+validation:
+  run_every_epochs: 1
+  decode_during_validation: true
+  max_val_trajectories: null
+
+  metrics:
+    - emission_top1_accuracy
+    - emission_top3_accuracy
+    - transition_top1_accuracy
+    - point_edge_accuracy
+    - mean_projection_error
+    - path_edit_distance
+
+checkpointing:
+  output_dir: outputs/checkpoints
+  save_best: true
+  save_last: true
+  monitor: val_point_edge_accuracy
+  mode: max
+
+  filenames:
+    best: gnn_hmm_best.pt
+    last: gnn_hmm_last.pt
+
+early_stopping:
+  enabled: true
+  monitor: val_point_edge_accuracy
+  mode: max
+  patience: 10
+  min_delta: 0.0001
+
+logging:
+  log_every_steps: 20
+  tensorboard: true
+  tensorboard_dir: outputs/tensorboard
+  save_training_report: true
+  training_report_path: data/reports/training_report.json

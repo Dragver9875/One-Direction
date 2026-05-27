@@ -1,0 +1,148 @@
+model:
+  name: gnn_hmm
+  task: gps_yaw_to_osm_segment_matching
+
+  inputs:
+    use_position: true
+    use_yaw: true
+    use_speed: true
+    use_road_graph: true
+    use_line_graph: true
+
+  outputs:
+    predict_edge_id: true
+    predict_projected_point: true
+    predict_confidence: true
+
+graph:
+  representation: edge_centric_line_graph
+  directed: true
+  use_self_transitions: true
+  hard_constraint_illegal_edges: true
+
+road_features:
+  numerical:
+    - length_m
+    - sin_bearing
+    - cos_bearing
+    - maxspeed_norm
+    - lanes_norm
+    - curvature
+    - in_degree
+    - out_degree
+    - bridge_flag
+    - tunnel_flag
+
+  categorical:
+    - road_class_id
+
+  normalize_numerical: true
+  categorical_embedding: true
+
+gnn:
+  type: graphsage
+  input_dim: null
+  hidden_dim: 128
+  output_dim: 128
+  num_layers: 2
+  dropout: 0.1
+  activation: relu
+  normalization: layernorm
+
+  graphsage:
+    aggregator: mean
+    root_weight: true
+    normalize: false
+
+  gat:
+    heads: 4
+    concat: true
+    negative_slope: 0.2
+    add_self_loops: true
+
+emission_head:
+  name: emission_mlp
+
+  input_components:
+    road_embedding: true
+    distance_m: true
+    yaw_diff_rad: true
+    offset_m: true
+    offset_ratio: true
+    speed_mps: true
+    sin_yaw: true
+    cos_yaw: true
+    sin_segment_bearing: true
+    cos_segment_bearing: true
+    candidate_rank: true
+
+  hidden_dims:
+    - 128
+    - 64
+
+  output_dim: 1
+  activation: relu
+  dropout: 0.1
+  normalization: layernorm
+
+transition_head:
+  name: transition_mlp
+
+  input_components:
+    prev_road_embedding: true
+    curr_road_embedding: true
+    gps_distance_m: true
+    route_distance_m: true
+    route_gps_distance_abs_diff_m: true
+    turn_angle_rad: true
+    yaw_change_rad: true
+    speed_consistency: true
+    is_connected: true
+    is_legal: true
+    same_edge: true
+    road_class_transition: true
+
+  hidden_dims:
+    - 128
+    - 64
+
+  output_dim: 1
+  activation: relu
+  dropout: 0.1
+  normalization: layernorm
+
+confidence:
+  method: viterbi_margin
+  temperature: 1.0
+  normalize_per_timestep: true
+
+decoder:
+  type: viterbi
+
+  scores:
+    use_emission_score: true
+    use_transition_score: true
+    combine_mode: additive
+
+  hard_constraints:
+    enabled: true
+    illegal_transition_score: -1000000000.0
+    disconnected_transition_penalty: -1000.0
+    max_route_distance_m: 300.0
+    max_speed_mps: 70.0
+    allow_candidate_jumps: true
+
+  transition_regularization:
+    use_classical_penalty: true
+    route_distance_weight: 0.05
+    yaw_change_weight: 0.1
+    illegal_transition_weight: 1000.0
+
+  numerical_stability:
+    use_log_scores: true
+    clamp_min: -1000000000.0
+    clamp_max: 1000000000.0
+
+initialization:
+  weight_init: xavier_uniform
+  bias_init: zeros

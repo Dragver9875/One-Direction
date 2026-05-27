@@ -1,0 +1,107 @@
+evaluation:
+  seed: 42
+  device: auto
+
+  inputs:
+    checkpoint: outputs/checkpoints/gnn_hmm_best.pt
+    test_dataset: data/processed/tensors/test_dataset.pt
+    line_graph: data/processed/line_graph/line_graph.pt
+    segment_features: data/processed/line_graph/segment_features.pt
+    edge_table: data/processed/road_graph/edge_table.parquet
+    gt_file: data/raw/trajectories/ground_truth.csv
+
+  outputs:
+    match_parquet: outputs/matches/gnn_hmm_matches.parquet
+    match_geojson: outputs/matches/gnn_hmm_matches.geojson
+    metrics_json: outputs/metrics/gnn_hmm_metrics.json
+    comparison_report: outputs/metrics/comparison_report.json
+    error_cases_csv: outputs/metrics/error_cases.csv
+
+decode:
+  split: test
+  batch_size: 1
+  use_viterbi: true
+  save_emission_scores: true
+  save_transition_scores: true
+
+  output_columns:
+    - trajectory_id
+    - t
+    - timestamp
+    - pred_edge_id
+    - pred_edge_idx
+    - pred_proj_x
+    - pred_proj_y
+    - confidence
+    - emission_score
+    - transition_score
+    - total_path_score
+
+metrics:
+  candidate:
+    enabled: true
+    topk:
+      - 1
+      - 3
+      - 5
+      - 10
+
+  point_level:
+    enabled: true
+    compute_edge_accuracy: true
+    compute_projection_error: true
+    compute_yaw_error: true
+
+  sequence_level:
+    enabled: true
+    compute_path_edit_distance: true
+    compute_trajectory_success_rate: true
+    compute_route_continuity_breaks: true
+
+  wrong_road:
+    enabled: true
+    parallel_road_threshold_m: 20.0
+    wrong_projection_threshold_m: 15.0
+
+  thresholds:
+    projection_success_m: 10.0
+    trajectory_success_edge_accuracy: 0.9
+    low_confidence_threshold: 0.5
+
+baseline_comparison:
+  enabled: true
+  baseline_dir: model_outputs
+  expected_schema:
+    - trajectory_id
+    - t
+    - timestamp
+    - pred_edge_id
+    - pred_proj_x
+    - pred_proj_y
+    - confidence
+
+visualization:
+  enabled: true
+
+  inputs:
+    edges_geojson: data/processed/road_graph/edges.geojson
+    nodes_geojson: data/processed/road_graph/nodes.geojson
+
+  outputs:
+    figure_dir: outputs/figures
+    candidate_debug: outputs/figures/candidate_debug.png
+    matched_paths: outputs/figures/matched_paths.png
+    error_cases: outputs/figures/error_cases.png
+
+  options:
+    max_trajectories_to_plot: 20
+    plot_gt: true
+    plot_predictions: true
+    plot_candidates: false
+    plot_error_cases: true
+
+reporting:
+  print_summary: true
+  save_json: true
+  save_csv_error_cases: true
+  save_geojson_matches: true

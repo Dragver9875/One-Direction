@@ -1,0 +1,175 @@
+data:
+  dataset_name: map_matching_2_floating_car_data
+
+  raw:
+    points_csv: data/raw/trajectories/points.csv
+    ground_truth_csv: data/raw/trajectories/ground_truth.csv
+    osm_pbf: data/raw/osm/oberfranken-latest.osm.pbf
+
+  interim:
+    trajectory_clean: data/interim/trajectory_clean.parquet
+    gt_routes_projected: data/interim/gt_routes_projected.parquet
+    osm_graph_raw: data/interim/osm_graph_raw.pkl
+
+  processed:
+    road_graph_dir: data/processed/road_graph
+    line_graph_dir: data/processed/line_graph
+    candidate_dir: data/processed/candidates
+    tensor_dir: data/processed/tensors
+    split_dir: data/processed/splits
+
+  reports:
+    preprocessing_report: data/reports/preprocessing_report.json
+    gt_route_report: data/reports/gt_route_report.json
+    osm_graph_report: data/reports/osm_graph_report.json
+    line_graph_report: data/reports/line_graph_report.json
+    candidate_report: data/reports/candidate_report.json
+
+coordinate_system:
+  source_crs: EPSG:4326
+  target_crs: EPSG:32632
+
+trajectory_preprocessing:
+  input_schema:
+    trajectory_id_column: id
+    timestamp_column: time
+    geometry_column: geometry
+
+  output_schema:
+    trajectory_id: trajectory_id
+    timestep: t
+    timestamp: timestamp
+    longitude: lon
+    latitude: lat
+    projected_x: x
+    projected_y: y
+    yaw: yaw
+    yaw_degrees: yaw_deg
+    speed: speed_mps
+
+  min_step_m_for_yaw: 0.25
+  max_reasonable_speed_mps: 70.0
+  remove_invalid_geometry: true
+  sort_by_time: true
+  handle_duplicate_timestamps: keep_with_zero_dt
+
+ground_truth:
+  input_schema:
+    trajectory_id_column: id
+    route_geometry_column: WKT
+
+  geometry_type: MULTILINESTRING
+  align_to_osm: true
+  alignment_search_radius_m: 30.0
+  alignment_max_candidates: 8
+  save_projected_routes: true
+
+osm:
+  network_type: drive
+  simplify: false
+  retain_all: true
+
+  highway_filter:
+    include:
+      - motorway
+      - motorway_link
+      - trunk
+      - trunk_link
+      - primary
+      - primary_link
+      - secondary
+      - secondary_link
+      - tertiary
+      - tertiary_link
+      - unclassified
+      - residential
+      - service
+      - living_street
+      - road
+
+    exclude:
+      - footway
+      - path
+      - cycleway
+      - bridleway
+      - steps
+      - pedestrian
+      - track
+
+  directed: true
+  add_reverse_edges_for_two_way: true
+  respect_oneway: true
+  respect_access_tags: true
+
+road_graph:
+  output_graph: data/processed/road_graph/road_graph.pkl
+  edge_table: data/processed/road_graph/edge_table.parquet
+  node_table: data/processed/road_graph/node_table.parquet
+  edges_geojson: data/processed/road_graph/edges.geojson
+  nodes_geojson: data/processed/road_graph/nodes.geojson
+
+  min_edge_length_m: 0.5
+  compute_bearing: true
+  compute_curvature: true
+  compute_degrees: true
+  normalize_maxspeed: true
+
+line_graph:
+  output_graph: data/processed/line_graph/line_graph.pt
+  edge_index: data/processed/line_graph/line_edge_index.pt
+  segment_features: data/processed/line_graph/segment_features.pt
+  edge_id_to_idx: data/processed/line_graph/edge_id_to_idx.json
+  idx_to_edge_id: data/processed/line_graph/idx_to_edge_id.json
+  transition_table: data/processed/line_graph/transition_table.parquet
+
+  connect_only_legal_transitions: true
+  allow_u_turns: false
+  max_turn_angle_deg_for_non_uturn: 160.0
+  include_self_transition: true
+
+candidate_generation:
+  radius_m: 50.0
+  max_candidates: 10
+  min_candidates: 1
+
+  spatial_index: rtree
+  rank_by:
+    - distance_m
+    - yaw_diff_rad
+
+  features:
+    distance_m: true
+    yaw_diff_rad: true
+    projection_xy: true
+    offset_m: true
+    offset_ratio: true
+    segment_bearing: true
+    candidate_rank: true
+    speed_consistency: true
+    road_class: true
+    oneway_compatibility: true
+
+  require_gt_in_candidates: true
+  candidate_recall_topk:
+    - 1
+    - 3
+    - 5
+    - 10
+
+splits:
+  strategy: trajectory_id
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  shuffle: true
+  seed: 42
+
+tensors:
+  train_dataset: data/processed/tensors/train_dataset.pt
+  val_dataset: data/processed/tensors/val_dataset.pt
+  test_dataset: data/processed/tensors/test_dataset.pt
+
+  pad_candidates: true
+  pad_value: -1
+  store_transition_features: true
+  store_emission_features: true

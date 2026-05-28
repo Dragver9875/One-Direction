@@ -37,6 +37,22 @@ def choose_device(device_arg: str) -> torch.device:
     return torch.device(device_arg)
 
 
+def resolve_checkpoint_paths(output: Path) -> tuple[Path, Path, Path]:
+    if output.suffix == ".pt":
+        checkpoint_dir = output.parent
+        best_path = output
+        if output.name.endswith("_best.pt"):
+            last_name = output.name.replace("_best.pt", "_last.pt")
+        else:
+            last_name = output.stem + "_last.pt"
+        last_path = output.with_name(last_name)
+    else:
+        checkpoint_dir = output
+        best_path = checkpoint_dir / "gnn_hmm_best.pt"
+        last_path = checkpoint_dir / "gnn_hmm_last.pt"
+    return checkpoint_dir, best_path, last_path
+
+
 def collate_trajectories(batch):
     return batch
 
@@ -229,7 +245,7 @@ def main() -> None:
     parser.add_argument("--line-graph", type=Path, default=Path("data/processed/line_graph/line_graph.pt"))
     parser.add_argument("--train", type=Path, default=Path("data/processed/tensors/train_dataset.pt"))
     parser.add_argument("--val", type=Path, default=Path("data/processed/tensors/val_dataset.pt"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/checkpoints"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/checkpoints"), help="Checkpoint directory or explicit best-checkpoint file path.")
     parser.add_argument("--report", type=Path, default=Path("data/reports/training_report.json"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -243,7 +259,8 @@ def main() -> None:
 
     set_seed(args.seed)
     device = choose_device(args.device)
-    ensure_dir(args.output)
+    checkpoint_dir, best_path, last_path = resolve_checkpoint_paths(args.output)
+    ensure_dir(checkpoint_dir)
     ensure_dir(args.report.parent)
 
     graph = torch.load(args.line_graph, map_location="cpu")
@@ -268,8 +285,6 @@ def main() -> None:
 
     history = []
     best_score = -1.0
-    best_path = args.output / "gnn_hmm_best.pt"
-    last_path = args.output / "gnn_hmm_last.pt"
 
     for epoch in range(1, args.epochs + 1):
         train_metrics = run_epoch(model, road_x, edge_index, train_loader, optimizer, device, True, args.transition_weight)

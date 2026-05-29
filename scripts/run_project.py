@@ -69,7 +69,7 @@ STAGES: list[Stage] = [
         group="train",
         default_args=[
             "--output", "outputs/checkpoints",
-            "--epochs", "60",
+            "--epochs", "100",
             "--batch-size", "2",
             "--lr", "0.001",
             "--emission-weight", "1.0",

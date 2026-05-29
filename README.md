@@ -1,8 +1,8 @@
 # One-Direction
 
-**One-Direction** is a GNN-enhanced HMM map-matching system that maps vehicle-acquired pose observations — position and yaw — onto the corresponding road segments of an OpenStreetMap road network.
+**One-Direction** is a GNN-enhanced HMM map-matching system that maps vehicle-acquired pose observations onto corresponding directed road segments in an OpenStreetMap road network.
 
-The system is designed for the following problem:
+The project focuses on the following problem:
 
 ```text
 Input:
@@ -16,7 +16,7 @@ Output:
     Globally consistent matched road-segment sequence
 ```
 
-Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-structured sequence-decoding problem**. The OSM road network is converted into a directed edge-centric graph, road segments are encoded using a Graph Neural Network, and the final trajectory is decoded using a custom HMM/Viterbi decoder with learned emission and transition scores.
+Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-structured sequence-decoding problem**. The OSM road network is converted into a directed road graph, then into an edge-centric line graph. A Graph Neural Network learns contextual road-segment embeddings, and a custom HMM/Viterbi decoder uses learned emission and transition scores to recover the most likely route.
 
 ---
 
@@ -24,63 +24,77 @@ Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-st
 
 For each vehicle observation:
 
-$$ z_t = (x_t, y_t, \psi_t) $$
+[
+z_t = (x_t, y_t, \psi_t)
+]
 
 where:
 
-* $(x_t, y_t)$ are the vehicle coordinates in a projected metric coordinate system.
-* $\psi_t$ is the vehicle yaw or heading.
-* $t$ is the trajectory timestep.
+* (x_t, y_t) are projected vehicle coordinates in meters.
+* (\psi_t) is the vehicle yaw or heading.
+* (t) is the trajectory timestep.
 
 The goal is to predict:
 
-$$ \hat{y}_t = (e_t, p_t, c_t) $$
+[
+\hat{y}_t = (e_t, p_t, c_t)
+]
 
 where:
 
-* $e_t$ is the matched directed OSM road segment.
-* $p_t$ is the projected point on the matched road segment.
-* $c_t$ is the confidence score.
+* (e_t) is the matched directed OSM road segment.
+* (p_t) is the projected point on that segment.
+* (c_t) is the confidence score.
 
-The final matched path is obtained by solving:
+The final decoded road-segment sequence is obtained by solving:
 
-$$ \hat{e}*{1:T} = \arg\max*{e_{1:T}} \left[ \sum_{t=1}^{T} E_\theta(z_t, e_t) + \sum_{t=2}^{T} T_\phi(e_{t-1}, e_t, z_{t-1}, z_t) \right] $$
+[
+\hat{e}_{1:T}
+=============
+
+\arg\max_{e_{1:T}}
+\left[
+\sum_{t=1}^{T} E_\theta(z_t, e_t)
++
+\sum_{t=2}^{T} T_\phi(e_{t-1}, e_t, z_{t-1}, z_t)
+\right]
+]
 
 where:
 
-* $E_\theta$ is the learned emission score.
-* $T_\phi$ is the learned transition score.
-* $\hat{e}_{1:T}$ is the globally decoded road-segment sequence.
+* (E_\theta) is the learned emission score.
+* (T_\phi) is the learned transition score.
+* (\hat{e}_{1:T}) is the globally decoded route over candidate OSM road segments.
 
 ---
 
 ## 2. Why GNN-HMM?
 
-Map matching is not a simple nearest-neighbour problem. A road segment may be spatially close to a GPS point but still be wrong due to:
+Map matching is not just nearest-road search. A road can be spatially close to a GPS point but still be incorrect due to:
 
 * parallel roads,
 * one-way constraints,
 * flyovers and underpasses,
 * highway/service-road ambiguity,
-* ramps,
+* ramps and slip roads,
 * roundabouts,
 * sparse GPS sampling,
 * yaw noise,
 * GPS drift,
-* dense urban road networks,
-* incorrect or incomplete OSM metadata.
+* dense intersections,
+* incomplete or inconsistent OSM metadata.
 
-One-Direction combines three important ideas:
+One-Direction combines three ideas:
 
 ```text
 1. Graph Neural Network
-   Learns contextual road-segment embeddings from the OSM topology.
+   Learns road-segment embeddings from OSM topology.
 
 2. Learned emission scoring
    Scores how well each GPS/yaw observation matches each candidate road segment.
 
 3. Learned transition scoring + HMM decoding
-   Scores how plausible it is to move from one road segment to another and uses Viterbi decoding to recover the best global path.
+   Scores road-to-road movement plausibility and uses Viterbi decoding to recover the best global path.
 ```
 
 This makes the system both **learned** and **topology-aware**.
@@ -90,9 +104,13 @@ This makes the system both **learned** and **topology-aware**.
 ## 3. System overview
 
 ```text
-GPS/yaw trajectory
+Vehicle pose trajectory
     ↓
 Trajectory preprocessing
+    ↓
+Coordinate projection
+    ↓
+Yaw/speed/step feature derivation
     ↓
 Candidate road-segment generation
     ↓
@@ -101,6 +119,8 @@ Candidate feature computation
 OSM PBF
     ↓
 Directed road graph construction
+    ↓
+Edge table and node table generation
     ↓
 Edge-centric line graph construction
     ↓
@@ -116,7 +136,7 @@ Emission head
     ↓
 Emission scores
 
-Candidate transition features + road embeddings
+Transition features + road embeddings
     ↓
 Transition head
     ↓
@@ -129,6 +149,8 @@ Custom HMM/Viterbi decoder
 Matched road-segment sequence
     ↓
 Projected points + confidence scores
+    ↓
+Evaluation + visual debugging
 ```
 
 ---
@@ -148,20 +170,20 @@ One-Direction/
 │   ├── data.yaml
 │   ├── model.yaml
 │   ├── train.yaml
-│   └── eval.yaml
+│   ├── eval.yaml
+│   └── local.yaml
 │
 ├── data/
 │   ├── raw/
 │   │   ├── osm/
-│   │   │   └── region.osm.pbf
+│   │   │   └── oberfranken-latest.osm.pbf
 │   │   └── trajectories/
-│   │       ├── gps_points.csv
-│   │       └── gt_matches.csv
+│   │       ├── points.csv
+│   │       └── ground_truth.csv
 │   │
 │   ├── interim/
-│   │   ├── osm_graph_raw.pkl
-│   │   ├── trajectory_projected.parquet
-│   │   └── trajectory_clean.parquet
+│   │   ├── trajectory_clean.parquet
+│   │   └── gt_routes_projected.parquet
 │   │
 │   ├── processed/
 │   │   ├── road_graph/
@@ -197,83 +219,28 @@ One-Direction/
 │   │
 │   └── reports/
 │       ├── preprocessing_report.json
+│       ├── gt_route_report.json
 │       ├── candidate_report.json
-│       ├── training_report.json
-│       └── evaluation_report.json
+│       ├── tensor_report.json
+│       ├── gnn_hmm_data_debug_report.json
+│       └── training_report.json
 │
 ├── src/
 │   ├── __init__.py
 │   ├── config.py
 │   │
 │   ├── data/
-│   │   ├── __init__.py
-│   │   ├── load_gps.py
-│   │   ├── load_gt.py
-│   │   ├── preprocess_trajectory.py
-│   │   ├── trajectory_splits.py
-│   │   ├── build_training_tensors.py
-│   │   └── dataset.py
-│   │
 │   ├── graph/
-│   │   ├── __init__.py
-│   │   ├── osm_graph_builder.py
-│   │   ├── road_graph_cleaner.py
-│   │   ├── line_graph_builder.py
-│   │   ├── graph_features.py
-│   │   ├── transition_builder.py
-│   │   └── candidate_search.py
-│   │
 │   ├── geometry/
-│   │   ├── __init__.py
-│   │   ├── projection.py
-│   │   ├── distances.py
-│   │   ├── bearing.py
-│   │   ├── polyline_ops.py
-│   │   └── yaw.py
-│   │
 │   ├── models/
-│   │   ├── __init__.py
-│   │   ├── road_gnn_encoder.py
-│   │   ├── emission_head.py
-│   │   ├── transition_head.py
-│   │   ├── gnn_hmm.py
-│   │   └── confidence_head.py
-│   │
 │   ├── decoder/
-│   │   ├── __init__.py
-│   │   ├── viterbi.py
-│   │   ├── hmm_decoder.py
-│   │   ├── path_constraints.py
-│   │   └── decode_outputs.py
-│   │
 │   ├── training/
-│   │   ├── __init__.py
-│   │   ├── losses.py
-│   │   ├── negative_sampling.py
-│   │   ├── train_gnn_hmm.py
-│   │   ├── validation.py
-│   │   ├── checkpointing.py
-│   │   └── scheduler.py
-│   │
 │   ├── evaluation/
-│   │   ├── __init__.py
-│   │   ├── metrics.py
-│   │   ├── sequence_metrics.py
-│   │   ├── projection_metrics.py
-│   │   ├── compare_with_baseline.py
-│   │   ├── error_analysis.py
-│   │   └── visualize_matches.py
-│   │
 │   └── utils/
-│       ├── __init__.py
-│       ├── io.py
-│       ├── logging.py
-│       ├── seed.py
-│       └── timing.py
 │
 ├── scripts/
 │   ├── 01_prepare_trajectories.py
-|   ├── 02_prepare_gt_routes.py
+│   ├── 02_prepare_gt_routes.py
 │   ├── 03_build_osm_graph.py
 │   ├── 04_build_line_graph.py
 │   ├── 05_generate_candidates.py
@@ -281,7 +248,11 @@ One-Direction/
 │   ├── 07_train_gnn_hmm.py
 │   ├── 08_decode_gnn_hmm.py
 │   ├── 09_evaluate.py
-│   └── 10_visualize_errors.py
+│   ├── 10_visualize_errors.py
+│   ├── 11_visualize_osm_overlay.py
+│   ├── 12_debug_gnn_hmm_data.py
+│   ├── 13_run_gnn_hmm_experiments.py
+│   └── run_project.py
 │
 ├── notebooks/
 │   ├── 01_inspect_trajectories.ipynb
@@ -295,24 +266,24 @@ One-Direction/
 │   │   ├── gnn_hmm_best.pt
 │   │   └── gnn_hmm_last.pt
 │   │
-│   ├── emissions/
-│   │   └── emission_scores.parquet
-│   │
-│   ├── transitions/
-│   │   └── transition_scores.parquet
-│   │
 │   ├── matches/
-│   │   ├── gnn_hmm_matches.parquet
-│   │   └── gnn_hmm_matches.geojson
+│   │   └── gnn_hmm_matches.parquet
 │   │
 │   ├── metrics/
 │   │   ├── gnn_hmm_metrics.json
-│   │   └── comparison_report.json
+│   │   ├── trajectory_metrics.csv
+│   │   ├── error_cases.csv
+│   │   └── gnn_hmm_experiment_summary.csv
 │   │
-│   └── figures/
-│       ├── candidate_debug.png
-│       ├── matched_paths.png
-│       └── error_cases.png
+│   ├── figures/
+│   │   ├── matched_paths.png
+│   │   ├── error_cases.png
+│   │   └── osm_overlay.html
+│   │
+│   └── run_logs/
+│
+├── RL/
+│   └── future PPO + asymmetric privileged learning extension
 │
 └── tests/
     ├── test_geometry.py
@@ -324,51 +295,56 @@ One-Direction/
     ├── test_training_tensors.py
     ├── test_gnn_hmm.py
     └── test_config.py
-
 ```
 
 ---
+
 ## 5. Data format
 
-### 5.1 GPS input
+### 5.1 Vehicle trajectory input
 
 Expected file:
 
 ```text
-data/raw/trajectories/gps_points.csv
+data/raw/trajectories/points.csv
 ```
 
-Expected schema:
+Expected content:
 
 ```text
-trajectory_id,timestamp,lat,lon,yaw
+trajectory_id
+timestamp
+x / y or latitude / longitude depending on dataset format
+yaw
 ```
 
-Optional fields:
+The preprocessing script projects coordinates into a local metric coordinate system, sorts the points by trajectory and time, computes motion features, and writes a clean trajectory file.
+
+Output:
 
 ```text
-speed,accuracy,source,vehicle_id
+data/interim/trajectory_clean.parquet
 ```
-
-If speed is unavailable, it is computed from consecutive points after coordinate projection.
 
 ---
 
-### 5.2 Ground-truth match file
+### 5.2 Ground-truth route input
 
 Expected file:
 
 ```text
-data/raw/trajectories/gt_matches.csv
+data/raw/trajectories/ground_truth.csv
 ```
 
-Expected schema:
+The ground-truth file is parsed into trajectory-level route geometry and projected into the same metric CRS as the vehicle observations.
+
+Output:
 
 ```text
-trajectory_id,timestamp,gt_edge_id,gt_proj_x,gt_proj_y
+data/interim/gt_routes_projected.parquet
 ```
 
-The ground-truth edge ID should correspond to the OSM-derived directed road segment ID after preprocessing. If the original GT uses a different ID system, an ID alignment/conflation step is required.
+The GT routes are then used to mark which generated candidate road segment is correct for each timestep.
 
 ---
 
@@ -377,20 +353,20 @@ The ground-truth edge ID should correspond to the OSM-derived directed road segm
 Expected file:
 
 ```text
-data/raw/osm/region.osm.pbf
+data/raw/osm/oberfranken-latest.osm.pbf
 ```
 
-The OSM file is parsed into a directed road graph. Each legal travel direction is represented separately.
+The OSM PBF is parsed into a directed road network. Each legal travel direction is represented as a separate directed edge.
 
-For example:
+Example:
 
 ```text
 Two-way road:
-    edge A → B
-    edge B → A
+    A → B
+    B → A
 
 One-way road:
-    only legal direction is retained
+    only the legal direction is retained
 ```
 
 ---
@@ -400,15 +376,15 @@ One-way road:
 The directed road graph represents the physical road network.
 
 ```text
-Road graph:
-    node = OSM intersection / endpoint / geometry node
-    edge = directed road segment
+node = OSM intersection / endpoint / geometry node
+edge = directed road segment
 ```
 
-Each edge stores:
+Each edge stores information such as:
 
 ```text
 edge_id
+edge_idx
 osm_way_id
 u
 v
@@ -421,9 +397,12 @@ maxspeed
 lanes
 bridge
 tunnel
+direction
 ```
 
-The directed representation is important because yaw-sensitive matching requires direction-aware road segments. A vehicle facing north should not be matched to the southbound version of a directed edge unless the transition model determines that such a match is plausible under the available constraints.
+The directed representation is important because yaw-sensitive map matching requires direction-aware road segments.
+
+A vehicle moving north should not be treated identically to a vehicle moving south on the same physical road, especially on one-way roads, ramps, divided roads, and junctions.
 
 ---
 
@@ -437,7 +416,7 @@ Original road graph:
     edge = road segment
 
 Line graph:
-    node = road segment
+    node = directed road segment
     edge = legal transition between road segments
 ```
 
@@ -453,7 +432,9 @@ Line graph:
 
 This representation is central to the model because the hidden HMM state is a road segment:
 
-$$ s_t = e_t $$
+[
+s_t = e_t
+]
 
 Therefore, every line-graph node corresponds directly to one possible hidden state.
 
@@ -461,10 +442,13 @@ Therefore, every line-graph node corresponds directly to one possible hidden sta
 
 ## 8. Road-segment features
 
-Each road-segment node receives a feature vector:
+Each road segment receives a feature vector.
+
+Typical road features include:
 
 ```text
 length_m
+log_length_m
 sin_bearing
 cos_bearing
 road_class_id
@@ -483,7 +467,7 @@ Angles are represented using sine and cosine instead of raw degrees or radians.
 Reason:
 
 ```text
-359° and 1° are close directions,
+359° and 1° are physically close directions,
 but as raw numbers they look far apart.
 ```
 
@@ -495,19 +479,15 @@ Using sine and cosine avoids angle wraparound errors.
 
 For every vehicle observation:
 
-$$ z_t = (x_t, y_t, \psi_t) $$
+[
+z_t = (x_t, y_t, \psi_t)
+]
 
-One-Direction finds a set of candidate road segments:
+One-Direction finds nearby road-segment candidates:
 
-$$ C_t = {e_{t,1}, e_{t,2}, \ldots, e_{t,k}} $$
-
-Recommended first configuration:
-
-```yaml
-candidate_generation:
-  radius_m: 50.0
-  max_candidates: 10
-```
+[
+C_t = {e_{t,1}, e_{t,2}, \ldots, e_{t,k}}
+]
 
 Each candidate stores:
 
@@ -527,24 +507,59 @@ candidate_rank
 is_gt
 ```
 
-The most important candidate-generation metric is **top-k candidate recall**:
+The candidate generator is a critical stage. If the true road segment is not present in the candidate set, the model cannot select it later.
 
-```text
-Does the true road segment appear in the candidate set?
-```
-
-If the true edge is not included in the candidate set, the model cannot recover it later.
-
-Recommended target:
-
-```text
-Top-5 candidate recall  > 95%
-Top-10 candidate recall > 98%
-```
+Candidate recall is therefore used as a preprocessing diagnostic.
 
 ---
 
-## 10. Model architecture
+## 10. Training tensor construction
+
+The tensor-building stage converts candidate tables into model-ready trajectory tensors.
+
+Output files:
+
+```text
+data/processed/tensors/train_dataset.pt
+data/processed/tensors/val_dataset.pt
+data/processed/tensors/test_dataset.pt
+```
+
+Each trajectory tensor contains:
+
+```text
+trajectory_id
+timesteps
+timestamps
+xy
+yaw
+speed_mps
+
+candidate_edge_idx
+candidate_mask
+candidate_proj_xy
+
+emission_features
+transition_features
+transition_mask
+
+gt_candidate_pos
+gt_edge_idx
+gt_proj_xy
+
+emission_feature_names
+transition_feature_names
+```
+
+The improved tensor builder includes richer emission and transition features.
+
+Emission features describe how well one GPS/yaw observation matches one candidate segment.
+
+Transition features describe how plausible it is to move from one candidate segment to another between consecutive timesteps.
+
+---
+
+## 11. Model architecture
 
 One-Direction contains four main model components:
 
@@ -557,7 +572,7 @@ One-Direction contains four main model components:
 
 ---
 
-### 10.1 Road GNN encoder
+### 11.1 Road GNN encoder
 
 The road GNN operates on the edge-centric line graph.
 
@@ -568,93 +583,100 @@ line_graph.pt
 segment_features.pt
 ```
 
-The encoder computes a road-segment embedding for every directed segment:
+The encoder computes an embedding for every directed road segment:
 
-$$ h_e = \mathrm{GNN}(x_e, G_{\text{line}}) $$
+[
+h_e = \mathrm{GNN}(x_e, G_{\text{line}})
+]
 
 where:
 
-* $x_e$ is the feature vector of road segment (e).
-* $G_{\text{line}}$ is the line graph.
-* $h_e$ is the learned segment embedding.
+* (x_e) is the road-segment feature vector.
+* (G_{\text{line}}) is the line graph.
+* (h_e) is the learned road-segment embedding.
 
-Recommended first encoder:
+Default encoder:
 
-```yaml
-gnn:
-  type: graphsage
-  hidden_dim: 128
-  output_dim: 128
-  num_layers: 2
-  dropout: 0.1
+```text
+GraphSAGE
 ```
 
-GraphSAGE is a suitable starting point because it is scalable, stable, and straightforward to train. A Graph Attention Network can be added later if attention over neighbouring road segments becomes useful for dense intersections and ambiguous roads.
+GraphSAGE is used because it is stable, scalable, and suitable as a first road-network encoder.
 
 ---
 
-### 10.2 Emission head
+### 11.2 Emission head
 
 The emission head answers:
 
 ```text
-How well does GPS/yaw observation z_t match candidate road segment $e$?
+How well does GPS/yaw observation z_t match candidate road segment e?
 ```
 
-For each candidate pair $(z_t, e)$, build:
+For each candidate pair ((z_t, e)), the model combines:
 
-$$ r_{t,e} = \begin{bmatrix} h_e \ d(z_t,e) \ \Delta\psi(z_t,e) \ \mathrm{offset}(z_t,e) \ \mathrm{speed}_t \ \sin(\psi_t) \ \cos(\psi_t) \ \sin(\theta_e) \ \cos(\theta_e) \end{bmatrix} $$
-
-where:
-
-* $h_e$ is the road-segment embedding.
-* $d(z_t,e)$ is the perpendicular distance from the vehicle point to the segment.
-* $\Delta\psi(z_t,e)$ is the yaw difference.
-* $\mathrm{offset}(z_t,e)$ is the projected offset along the segment.
-* $\theta_e$ is the road-segment bearing.
+```text
+road-segment embedding
+distance to road
+yaw difference
+offset along road
+vehicle speed
+road bearing
+candidate rank
+road metadata
+```
 
 The emission score is:
 
-$$ E_\theta(z_t,e) = \mathrm{MLP}*{\text{emission}}(r*{t,e}) $$
+[
+E_\theta(z_t, e) = \mathrm{MLP}*{\text{emission}}(r*{t,e})
+]
+
+where (r_{t,e}) is the candidate-specific feature vector.
 
 ---
 
-### 10.3 Transition head
+### 11.3 Transition head
 
 The transition head answers:
 
 ```text
-How plausible is it to move from road segment $e_i$ at timestep t-1 to road segment $e_j$ at timestep t?
+How plausible is it to move from road segment e_i at timestep t-1 to road segment e_j at timestep t?
 ```
 
-For each candidate transition $(e_i, e_j)$, build:
+For each candidate transition ((e_i, e_j)), the model combines:
 
-$$ q_{i,j,t} = \begin{bmatrix} h_i \ h_j \ d_{\text{gps}} \ d_{\text{route}} \ \lvert d_{\text{route}} - d_{\text{gps}} \rvert \ \mathrm{turn_angle} \ \mathrm{yaw_change} \ \mathrm{speed_consistency} \ \mathrm{is_connected} \ \mathrm{is_legal} \end{bmatrix} $$
+```text
+previous road embedding
+current road embedding
+GPS displacement
+time gap
+observed speed
+route-distance proxy
+route-vs-GPS distance mismatch
+turn angle
+yaw change
+same-edge flag
+same-OSM-way flag
+same-road-class flag
+legal-transition flag
+time-feasibility flag
+```
 
 The transition score is:
 
-$$ T_\phi(e_i,e_j,z_{t-1},z_t) = \mathrm{MLP}*{\text{transition}}(q*{i,j,t}) $$
+[
+T_\phi(e_i, e_j, z_{t-1}, z_t)
+==============================
 
-Hard constraints are still enforced even though the transition score is learned.
+\mathrm{MLP}*{\text{transition}}(q*{i,j,t})
+]
 
-Examples:
-
-```text
-illegal one-way transition:
-    score = -inf
-
-disconnected transition beyond allowed search range:
-    score = large negative penalty
-
-route distance too large:
-    score = large negative penalty
-```
-
-The neural transition scorer should improve ranking among plausible transitions, not override physical and topological constraints.
+The transition model is learned, but impossible or highly implausible transitions can still be penalized during decoding.
 
 ---
 
-### 10.4 HMM/Viterbi decoder
+### 11.4 HMM/Viterbi decoder
 
 For each trajectory, the decoder receives:
 
@@ -671,607 +693,612 @@ transition scores:
 
 The decoder solves:
 
-$$ \hat{e}*{1:T} = \arg\max*{e_t \in C_t} \left[ \sum_{t=1}^{T} E_t(e_t) + \sum_{t=2}^{T} T_t(e_{t-1}, e_t) \right] $$
+[
+\hat{e}_{1:T}
+=============
+
+\arg\max_{e_t \in C_t}
+\left[
+\sum_{t=1}^{T} E_t(e_t)
++
+\sum_{t=2}^{T} T_t(e_{t-1}, e_t)
+\right]
+]
 
 Viterbi recurrence:
 
-$$ V_1(e) = E_1(e) $$
+[
+V_1(e) = E_1(e)
+]
 
-$$ V_t(e) = E_t(e) + \max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e',e) \right] $$
+[
+V_t(e) =
+E_t(e)
++
+\max_{e' \in C_{t-1}}
+\left[
+V_{t-1}(e') + T_t(e', e)
+\right]
+]
 
 Backpointer:
 
-$$ B_t(e) = \arg\max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e',e) \right] $$
+[
+B_t(e) =
+\arg\max_{e' \in C_{t-1}}
+\left[
+V_{t-1}(e') + T_t(e', e)
+\right]
+]
 
-The final edge is:
+The final road segment is:
 
-$$ \hat{e}_T = \arg\max_e V_T(e) $$
+[
+\hat{e}_T = \arg\max_e V_T(e)
+]
 
-Then the full matched sequence is recovered by backtracking through the backpointers.
+The full sequence is recovered by backtracking through the stored backpointers.
 
 ---
 
-## 11. Training objective
+## 12. Training objective
 
-One-Direction trains the emission and transition scores jointly.
+The GNN-HMM model trains emission and transition scores jointly.
 
-Given a ground-truth road-segment sequence:
+Given a ground-truth candidate sequence:
 
-$$ e_1^{\text{GT}}, e_2^{\text{GT}}, \ldots, e_T^{\text{GT}} $$
+[
+e_1^{GT}, e_2^{GT}, \ldots, e_T^{GT}
+]
 
-The training objective contains two main terms:
+the training objective contains:
 
 ```text
 1. Emission loss
 2. Transition loss
+3. Optional hard-negative margin loss
+4. Optional label smoothing
 ```
 
 ---
 
-### 11.1 Emission loss
+### 12.1 Emission loss
 
-For each GPS observation, the model should rank the GT road segment above the other candidate segments:
+For each GPS observation, the model should rank the GT candidate above the other candidates:
 
-$$ \mathcal{L}*{\text{emission}} = -\sum_t \log \frac{ \exp(E_t(e_t^{\text{GT}})) }{ \sum*{e \in C_t} \exp(E_t(e)) } $$
+[
+\mathcal{L}_{\text{emission}}
+=============================
 
----
-
-### 11.2 Transition loss
-
-For each consecutive GT transition, the model should rank the correct next segment above alternative next candidates:
-
-$$ \mathcal{L}*{\text{transition}} = -\sum*{t=2}^{T} \log \frac{ \exp(T_t(e_{t-1}^{\text{GT}},e_t^{\text{GT}})) }{ \sum_{e \in C_t} \exp(T_t(e_{t-1}^{\text{GT}},e)) } $$
-
----
-
-### 11.3 Total loss
-
-$$ \mathcal{L} = \mathcal{L}*{\text{emission}} + \lambda_T \mathcal{L}*{\text{transition}} + \lambda_R \lVert \Theta \rVert_2^2 $$
-
-Recommended first setting:
-
-```yaml
-loss:
-  emission_weight: 1.0
-  transition_weight: 1.0
-  weight_decay: 0.0001
-```
-
-The first implementation does not need to backpropagate through Viterbi. The model can train local emission and transition scores, then use Viterbi for global decoding at inference time.
+-\sum_t
+\log
+\frac{
+\exp(E_t(e_t^{GT}))
+}{
+\sum_{e \in C_t} \exp(E_t(e))
+}
+]
 
 ---
 
-## 12. Running the pipeline
+### 12.2 Transition loss
 
-### 12.1 Prepare trajectories
+For each consecutive GT transition, the model should rank the correct next candidate above alternative next candidates:
 
-```bash
-python scripts/01_prepare_trajectories.py \
-  --input data/raw/trajectories/gps_points.csv \
-  --output data/interim/trajectory_clean.parquet
-```
+[
+\mathcal{L}_{\text{transition}}
+===============================
 
-This script:
+-\sum_{t=2}^{T}
+\log
+\frac{
+\exp(T_t(e_{t-1}^{GT}, e_t^{GT}))
+}{
+\sum_{e \in C_t} \exp(T_t(e_{t-1}^{GT}, e))
+}
+]
+
+---
+
+### 12.3 Hard-negative margin loss
+
+The emission loss can include a margin term that forces the GT candidate to score higher than the hardest wrong candidate:
+
+[
+\mathcal{L}_{\text{margin}}
+===========================
+
+\max(0, m - s_{GT} + s_{\text{hard negative}})
+]
+
+This helps the model learn difficult cases such as nearby parallel roads, service roads, ramps, and reverse-direction candidates.
+
+---
+
+### 12.4 Total loss
+
+[
+\mathcal{L}
+===========
+
+\lambda_E \mathcal{L}*{\text{emission}}
++
+\lambda_T \mathcal{L}*{\text{transition}}
++
+\lambda_M \mathcal{L}_{\text{margin}}
+]
+
+The current training script exposes these weights as command-line arguments.
+
+---
+
+## 13. Evaluation metrics
+
+The evaluation script reports both strict edge-ID metrics and geometry-aware diagnostics.
+
+Important metric categories:
 
 ```text
-loads GPS data
-sorts by trajectory_id and timestamp
-projects lat/lon to x/y
-normalizes yaw
-computes speed
-removes invalid points
+Exact edge identity:
+    point_edge_accuracy
+
+Spatial quality:
+    mean_projection_error_m
+    median_projection_error_m
+    p90_projection_error_m
+    within_2m_rate
+    within_5m_rate
+    within_10m_rate
+
+Road-level semantic consistency:
+    same_osm_way_accuracy
+    same_road_class_accuracy
+    same_undirected_uv_accuracy
+
+Sequence quality:
+    path_edit_distance_mean
+    path_edit_distance_median
+    trajectory_success_rate
+
+Transition quality:
+    pred_transition_legal_rate
+    gt_transition_legal_rate
+
+Error taxonomy:
+    error_near_but_wrong_edge_rate
+    error_same_way_rate
+    error_reverse_edge_rate
+    error_severe_rate
 ```
 
----
+Exact edge-ID accuracy is strict. It can count a prediction as wrong even if the predicted segment lies on the same physical road but has a different OSM edge ID.
 
-### 12.2 Build OSM road graph
-
-```bash
-python scripts/02_build_osm_graph.py \
-  --osm data/raw/osm/region.osm.pbf \
-  --output data/processed/road_graph/
-```
-
-This script:
+For this reason, geometry-aware and same-way diagnostics are included to distinguish:
 
 ```text
-parses OSM
-builds a directed road graph
-extracts edge geometries
-computes length and bearing
-saves graph and edge table
+true wrong-road errors
+same-road split-segment errors
+reverse-direction errors
+nearby parallel-road errors
+illegal-transition errors
+GT/OSM alignment issues
 ```
 
 ---
 
-### 12.3 Build line graph
+## 14. Visualization
 
-```bash
-python scripts/03_build_line_graph.py \
-  --road-graph data/processed/road_graph/road_graph.pkl \
-  --output data/processed/line_graph/
-```
+One-Direction includes two visualization modes.
 
-This script:
+### 14.1 Static error visualization
+
+Script:
 
 ```text
-converts road edges into line-graph nodes
-connects legal road-segment transitions
-computes segment features
-saves graph tensors
+scripts/10_visualize_errors.py
 ```
 
----
-
-### 12.4 Generate candidates
-
-```bash
-python scripts/04_generate_candidates.py \
-  --trajectories data/interim/trajectory_clean.parquet \
-  --edges data/processed/road_graph/edge_table.parquet \
-  --gt data/raw/trajectories/gt_matches.csv \
-  --output data/processed/candidates/
-```
-
-This script:
+Purpose:
 
 ```text
-finds nearest road segments
-computes projection points
-computes distance to segment
-computes yaw difference
-marks GT candidates
-reports top-k candidate recall
+Plot predicted path, GT-derived path, OSM graph, and error points.
 ```
 
----
-
-### 12.5 Build training tensors
-
-```bash
-python scripts/05_build_training_tensors.py \
-  --candidates data/processed/candidates/ \
-  --line-graph data/processed/line_graph/ \
-  --output data/processed/tensors/
-```
-
-This script:
+Output:
 
 ```text
-groups candidates by trajectory
-builds candidate index tensors
-builds emission feature tensors
-builds transition feature tensors
-builds GT labels
+outputs/figures/
 ```
 
----
+### 14.2 Interactive OSM overlay
 
-### 12.6 Train One-Direction
-
-```bash
-python scripts/06_train_gnn_hmm.py \
-  --config configs/model.yaml
-```
-
-This script:
+Script:
 
 ```text
-loads the line graph
-loads trajectory candidate tensors
-runs the road GNN encoder
-computes emission scores
-computes transition scores
-computes emission loss
-computes transition loss
-saves checkpoints
+scripts/11_visualize_osm_overlay.py
 ```
 
----
-
-### 12.7 Decode trajectories
-
-```bash
-python scripts/07_decode_gnn_hmm.py \
-  --checkpoint outputs/checkpoints/gnn_hmm_best.pt \
-  --split test \
-  --output outputs/matches/
-```
-
-This script:
+Purpose:
 
 ```text
-loads the trained model
-computes emission scores
-computes transition scores
-runs Viterbi decoding
-recovers matched segment sequence
-projects points onto matched segments
-saves matches
+Overlay extracted road graph, predicted path, GT-derived path, and GPS points over an OpenStreetMap basemap.
 ```
 
----
-
-### 12.8 Evaluate
-
-```bash
-python scripts/08_evaluate.py \
-  --pred outputs/matches/gnn_hmm_matches.parquet \
-  --gt data/raw/trajectories/gt_matches.csv \
-  --output outputs/metrics/
-```
-
-This script computes:
+This is used to verify:
 
 ```text
-point_edge_accuracy
-top_k_candidate_recall
-mean_projection_error
-median_projection_error
-path_edit_distance
-wrong_road_rate
-yaw_error
-trajectory_success_rate
+extracted graph alignment with actual OSM tiles
+CRS correctness
+prediction plausibility
+GT/OSM map-version mismatch
+same-road vs wrong-road errors
 ```
-
----
-
-### 12.9 Visualize errors
-
-```bash
-python scripts/09_visualize_errors.py \
-  --pred outputs/matches/gnn_hmm_matches.parquet \
-  --edges data/processed/road_graph/edges.geojson \
-  --output outputs/figures/
-```
-
-This script generates:
-
-```text
-matched path overlays
-wrong-road examples
-parallel road failures
-candidate ambiguity cases
-decoder failure cases
-```
-
----
-
-## 13. Configuration example
-
-```yaml
-project:
-  name: One-Direction
-  seed: 42
-
-data:
-  trajectory_file: data/interim/trajectory_clean.parquet
-  gt_file: data/raw/trajectories/gt_matches.csv
-  road_graph_dir: data/processed/road_graph
-  line_graph_dir: data/processed/line_graph
-  candidate_dir: data/processed/candidates
-  tensor_dir: data/processed/tensors
-
-candidate_generation:
-  radius_m: 50.0
-  max_candidates: 10
-  require_gt_in_candidates: true
-
-graph:
-  directed: true
-  use_line_graph: true
-  max_transition_distance_m: 300.0
-
-model:
-  name: gnn_hmm
-
-  gnn:
-    type: graphsage
-    input_dim: null
-    hidden_dim: 128
-    output_dim: 128
-    num_layers: 2
-    dropout: 0.1
-
-  emission_head:
-    hidden_dims: [128, 64]
-    dropout: 0.1
-
-  transition_head:
-    hidden_dims: [128, 64]
-    dropout: 0.1
-
-decoder:
-  type: viterbi
-  illegal_transition_score: -1000000000.0
-  disconnected_transition_penalty: -1000.0
-  max_route_distance_m: 300.0
-  confidence_method: margin
-
-training:
-  batch_size: 8
-  epochs: 50
-  lr: 0.001
-  weight_decay: 0.0001
-  grad_clip_norm: 5.0
-
-loss:
-  emission_weight: 1.0
-  transition_weight: 1.0
-
-evaluation:
-  metrics:
-    - point_edge_accuracy
-    - mean_projection_error
-    - median_projection_error
-    - path_edit_distance
-    - wrong_road_rate
-    - trajectory_success_rate
-```
-
----
-
-## 14. Evaluation metrics
-
-### 14.1 Point edge accuracy
-
-Measures the fraction of timesteps where the predicted edge ID matches the GT edge ID.
-
-```text
-point_edge_accuracy = correct_edge_predictions / total_points
-```
-
----
-
-### 14.2 Candidate recall
-
-Measures whether the GT edge appears in the generated candidate set.
-
-```text
-Top-k candidate recall = points where GT edge appears in top-k candidates / total points
-```
-
-This is a preprocessing metric, but it is essential. Low candidate recall caps final model accuracy.
-
----
-
-### 14.3 Projection error
-
-Measures the distance between the predicted projected point and the GT projected point.
-
-```text
-projection_error = distance(pred_proj, gt_proj)
-```
-
-Report both mean and median values.
-
----
-
-### 14.4 Path edit distance
-
-Measures the sequence-level difference between predicted and GT edge sequences.
-
-This catches errors that point-level accuracy may hide, such as:
-
-```text
-wrong turn at an intersection
-incorrect ramp choice
-jump to parallel road
-broken route continuity
-```
-
----
-
-### 14.5 Wrong-road rate
-
-Measures cases where the selected road is close to the GPS point but semantically/topologically wrong.
-
-Common examples:
-
-```text
-highway vs service road
-flyover vs ground road
-main road vs side lane
-opposite direction of divided road
-```
-
----
-
-### 14.6 Trajectory success rate
-
-Measures the fraction of trajectories that are matched successfully under a chosen correctness threshold.
 
 Example:
 
-```text
-trajectory_success_rate = trajectories with edge accuracy above threshold / total trajectories
+```powershell
+python scripts\11_visualize_osm_overlay.py --trajectory-id 44
+```
+
+Generate a combined overlay:
+
+```powershell
+python scripts\11_visualize_osm_overlay.py
 ```
 
 ---
 
-## 15. Model outputs
+## 15. Unified pipeline runner
 
-The final prediction file is:
-
-```text
-outputs/matches/gnn_hmm_matches.parquet
-```
-
-Expected schema:
+The project includes a unified runner:
 
 ```text
-trajectory_id
-t
-timestamp
-pred_edge_id
-pred_edge_idx
-pred_proj_x
-pred_proj_y
-confidence
-emission_score
-transition_score
-total_path_score
+scripts/run_project.py
 ```
 
-GeoJSON output:
+List available stages:
 
-```text
-outputs/matches/gnn_hmm_matches.geojson
+```powershell
+python scripts\run_project.py --list
 ```
 
-This can be opened in GIS tools or visualized in notebooks.
+Dry-run full GNN-HMM pipeline:
+
+```powershell
+python scripts\run_project.py gpu_e2e --dry-run
+```
+
+Run full GNN-HMM pipeline:
+
+```powershell
+python scripts\run_project.py gpu_e2e
+```
+
+Run from a specific stage:
+
+```powershell
+python scripts\run_project.py gpu_e2e --from-stage train
+```
+
+Run only data preparation:
+
+```powershell
+python scripts\run_project.py data
+```
+
+Run only evaluation and visualization:
+
+```powershell
+python scripts\run_project.py post
+```
 
 ---
 
-## 16. Comparison with external baselines
+## 16. Manual pipeline commands
 
-This repository focuses on the GNN-enhanced HMM system. If another team member or external module provides baseline outputs, they should be exported using the common format:
+Run commands from the repository root:
 
-```text
-model_outputs/{model_name}_matches.parquet
+```powershell
+cd E:\PANDA\One-Direction
 ```
 
-Required columns:
+### 16.1 Prepare trajectories
 
-```text
-trajectory_id
-t
-timestamp
-pred_edge_id
-pred_proj_x
-pred_proj_y
-confidence
+```powershell
+python scripts\01_prepare_trajectories.py
 ```
 
-The comparison script can then evaluate all models against the same GT file.
+### 16.2 Prepare GT routes
+
+```powershell
+python scripts\02_prepare_gt_routes.py
+```
+
+### 16.3 Build directed OSM graph
+
+```powershell
+python scripts\03_build_osm_graph.py
+```
+
+### 16.4 Build line graph
+
+```powershell
+python scripts\04_build_line_graph.py
+```
+
+### 16.5 Generate candidates
+
+```powershell
+python scripts\05_generate_candidates.py
+```
+
+### 16.6 Build improved training tensors
+
+```powershell
+python scripts\06_build_training_tensors.py --transition-mask-mode all
+```
+
+Available transition mask modes:
+
+```text
+all      Keep all candidate-to-candidate transitions available.
+legal    Keep only graph-legal or same-edge transitions.
+speed    Keep graph-legal transitions that also satisfy a speed-feasibility check.
+```
+
+The recommended first mode is:
+
+```text
+all
+```
+
+After verifying GT transition validity, stricter modes can be tested.
+
+### 16.7 Run data-debug checks
+
+```powershell
+python scripts\12_debug_gnn_hmm_data.py
+```
+
+Output:
+
+```text
+data/reports/gnn_hmm_data_debug_report.json
+```
+
+This report verifies:
+
+```text
+tensor shapes
+candidate mask density
+transition mask density
+GT candidate-position validity
+GT transition validity
+edge ID uniqueness
+road-class distribution
+candidate recall by trajectory
+```
+
+### 16.8 Train GNN-HMM
+
+```powershell
+python scripts\07_train_gnn_hmm.py `
+  --output outputs\checkpoints `
+  --epochs 100 `
+  --batch-size 2 `
+  --lr 0.001 `
+  --emission-weight 1.0 `
+  --transition-weight 2.0 `
+  --label-smoothing 0.02 `
+  --margin-weight 0.1 `
+  --margin 1.0 `
+  --device auto
+```
+
+Output:
+
+```text
+outputs/checkpoints/gnn_hmm_best.pt
+outputs/checkpoints/gnn_hmm_last.pt
+data/reports/training_report.json
+```
+
+### 16.9 Decode
+
+```powershell
+python scripts\08_decode_gnn_hmm.py `
+  --checkpoint outputs\checkpoints\gnn_hmm_best.pt `
+  --output outputs\matches\gnn_hmm_matches.parquet `
+  --illegal-transition-mode soft `
+  --illegal-penalty 5.0 `
+  --device auto
+```
+
+Available illegal-transition modes:
+
+```text
+none    Do not adjust illegal transitions.
+soft    Apply a finite penalty.
+hard    Mask illegal transitions with a very large negative score.
+```
+
+Recommended first mode:
+
+```text
+soft
+```
+
+### 16.10 Evaluate
+
+```powershell
+python scripts\09_evaluate.py
+```
+
+Output:
+
+```text
+outputs/metrics/gnn_hmm_metrics.json
+outputs/metrics/trajectory_metrics.csv
+outputs/metrics/error_cases.csv
+```
+
+### 16.11 Visualize static errors
+
+```powershell
+python scripts\10_visualize_errors.py
+```
+
+### 16.12 Generate OSM overlay
+
+```powershell
+python scripts\11_visualize_osm_overlay.py
+```
 
 ---
 
-## 17. Recommended development order
+## 17. Local GPU workflow
+
+### 17.1 Activate environment
+
+If Conda is available directly:
+
+```powershell
+conda activate one-direction
+```
+
+If PowerShell cannot find `conda`, initialize the shell hook manually:
+
+```powershell
+& "E:\Anaconda3\shell\condabin\conda-hook.ps1"
+conda activate one-direction
+```
+
+Or run with the environment Python directly:
+
+```powershell
+E:\Anaconda3\envs\one-direction\python.exe scripts\run_project.py gpu_e2e
+```
+
+### 17.2 Set geospatial environment variables
+
+```powershell
+$env:PYTHONPATH="E:\PANDA\One-Direction"
+$env:GDAL_DATA="$env:CONDA_PREFIX\Library\share\gdal"
+$env:PROJ_LIB="$env:CONDA_PREFIX\Library\share\proj"
+```
+
+### 17.3 Verify GPU and dependencies
+
+```powershell
+python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python -c "import geopandas, shapely, pyproj, osmnx; print('geo stack ok')"
+python -c "import src; print(src.__project__, src.__version__)"
+```
+
+### 17.4 Start end-to-end run
+
+```powershell
+python scripts\run_project.py gpu_e2e
+```
+
+---
+
+## 18. Debugging checklist
+
+Before judging model quality, verify the following:
 
 ```text
-1. Implement coordinate projection and yaw normalization.
+1. Raw trajectory points are sorted correctly by trajectory and timestamp.
+2. Coordinates are projected into a metric CRS.
+3. OSM graph aligns with the actual OSM basemap.
+4. Road directionality is preserved.
+5. Two-way roads have forward and reverse directed edges.
+6. One-way roads do not incorrectly receive reverse edges.
+7. Candidate generation includes the GT road segment.
+8. GT candidate position is valid in tensors.
+9. Transition mask does not incorrectly reject GT transitions.
+10. Edge IDs and edge indices are unique and stable.
+11. Prediction errors are classified into true wrong-road, same-way, reverse-edge, and near-geometry cases.
+```
+
+Important debug scripts:
+
+```powershell
+python scripts\12_debug_gnn_hmm_data.py
+python scripts\11_visualize_osm_overlay.py
+```
+
+---
+
+## 19. Recommended development order
+
+```text
+1. Prepare and inspect trajectory data.
 2. Build directed OSM road graph.
-3. Build edge-centric line graph.
-4. Generate candidate road segments.
-5. Verify top-k candidate recall.
-6. Build training tensors.
-7. Implement RoadGNNEncoder.
-8. Implement EmissionHead.
-9. Implement TransitionHead.
-10. Implement Viterbi decoder.
-11. Train emission and transition scorers jointly.
-12. Decode trajectories.
-13. Evaluate edge accuracy and projection error.
-14. Visualize failure cases.
-15. Improve candidate generation and transition features.
+3. Verify graph alignment with OSM overlay.
+4. Build edge-centric line graph.
+5. Generate candidate road segments.
+6. Verify candidate recall.
+7. Build training tensors.
+8. Verify tensor and transition validity.
+9. Train the GNN-HMM.
+10. Decode with transition-aware Viterbi.
+11. Evaluate with exact, geometry-aware, same-way, and transition metrics.
+12. Visualize failure cases.
+13. Tune transition weight and illegal-transition penalty.
+14. Improve transition features and sequence-level constraints.
+15. Compare against classical and learned baselines.
 ```
-
-The first hard checkpoint is candidate recall. If candidate recall is poor, improve spatial indexing, search radius, road filtering, geometry projection, and GT-to-OSM ID alignment before training the model.
-
----
-
-## 18. Important implementation notes
-
-### 18.1 Coordinate system
-
-Never compute metric distances directly in latitude/longitude degrees.
-
-Use:
-
-```text
-WGS84 latitude/longitude
-    ↓
-local projected CRS / UTM
-    ↓
-x, y in meters
-```
-
----
-
-### 18.2 Directionality
-
-Always preserve road direction.
-
-Yaw-sensitive matching requires directed segments. A bidirectional OSM road should become two directed edges.
-
----
-
-### 18.3 Candidate recall before model accuracy
-
-Candidate generation is not a minor preprocessing step. It controls the maximum possible accuracy of the model.
-
-If the GT road segment is absent from the candidate list, the decoder cannot select it.
-
----
-
-### 18.4 Hard constraints should remain hard
-
-The transition model is learned, but it should not override impossible graph constraints.
-
-Examples of hard constraints:
-
-```text
-illegal one-way movement
-physically impossible jump
-route distance far beyond feasible motion
-invalid disconnected transition
-```
-
----
-
-### 18.5 Do not rely only on point-level accuracy
-
-Map matching is a sequence problem. A model can have acceptable point-level accuracy but still produce bad route continuity.
-
-Always report sequence-level metrics such as:
-
-```text
-path edit distance
-wrong-road rate
-trajectory success rate
-```
-
----
-
-## 19. Expected failure cases
-
-One-Direction should explicitly analyze the following failure cases:
-
-```text
-parallel roads
-highway and service-road ambiguity
-flyovers and underpasses
-roundabouts
-GPS drift near intersections
-low sampling rate trajectories
-wrong or missing OSM one-way tags
-incorrect OSM road class
-candidate set missing the true road
-sudden yaw noise
-trajectory gaps
-```
-
-These cases are important because they are where naive nearest-road matching usually fails.
 
 ---
 
 ## 20. Future extensions
 
-Possible extensions include:
+The current focus is the **GNN-HMM map-matching pipeline**. Possible future extensions include:
 
 ```text
 Graph Attention Network road encoder
-Temporal trajectory encoder
-CRF-style structured training
+Directed line-graph attention
+CRF-style sequence-level training
 Differentiable Viterbi / soft dynamic programming
-Uncertainty-aware emission scores
-Map-error detection head
+Hard-negative mining for ambiguous candidates
+Shortest-path-based transition features
+Synthetic route generation from OSM
+Pseudo-labelling large raw GPS datasets
 Online streaming map matching
-Synthetic trajectory generation from OSM/SUMO
-Pseudo-labelling from large raw GPS datasets
-Road closure and access reliability prediction
+Routing-service integration
 ```
+
+### Future RL extension: PPO with Asymmetric Privileged Learning
+
+A future branch can treat map matching as a sequential decision problem:
+
+```text
+episode = one trajectory
+step    = one GPS observation
+action  = choose one candidate road segment
+```
+
+A PPO actor would use only deployment-safe features:
+
+```text
+GPS/yaw features
+candidate features
+candidate mask
+previous selected candidate
+```
+
+A privileged critic could use training-only information:
+
+```text
+GT candidate position
+GT route geometry
+future local candidate context
+same-way/reverse-edge hints
+transition legality labels
+```
+
+This asymmetric setup can be used as a future sequence-level learning baseline, but it is separate from the current GNN-HMM implementation.
 
 ---
 
@@ -1288,13 +1315,14 @@ GNN road-segment encoder
 Learned emission scoring
 Learned transition scoring
 Custom HMM/Viterbi decoder
+Geometry-aware and topology-aware evaluation
 ```
 
 The final output is:
 
 ```text
 matched OSM road segment per timestep
-projected point on road segment
+projected point on matched road segment
 confidence score
 globally consistent matched road-segment sequence
 ```
@@ -1303,5 +1331,5 @@ The central design principle is:
 
 ```text
 Use neural learning to improve road-segment and transition scoring,
-but preserve graph topology and sequence consistency through HMM decoding.
+while preserving graph topology and sequence consistency through HMM decoding.
 ```

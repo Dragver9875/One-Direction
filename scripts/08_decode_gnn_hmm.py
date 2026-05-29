@@ -121,6 +121,35 @@ def softmax_confidence(emissions: torch.Tensor, path: list[int]) -> list[float]:
     return [float(probs[t, c].detach().cpu().item()) for t, c in enumerate(path)]
 
 
+def find_feature_index(item: dict, name: str, fallback: int | None = None) -> int | None:
+    names = item.get("transition_feature_names")
+    if isinstance(names, list) and name in names:
+        return int(names.index(name))
+    return fallback
+
+
+def apply_illegal_transition_adjustment(transitions: torch.Tensor, item: dict, mode: str, penalty: float) -> torch.Tensor:
+    feats = item.get("transition_features")
+    if feats is None or transitions.numel() == 0:
+        return transitions
+    feats = feats.to(transitions.device)
+    legal_idx = find_feature_index(item, "legal", 7)
+    same_idx = find_feature_index(item, "same_edge", 8)
+    feasible_idx = find_feature_index(item, "time_feasible", None)
+    if legal_idx is None or legal_idx >= feats.shape[-1]:
+        return transitions
+    legal = feats[..., legal_idx] > 0.5
+    if same_idx is not None and same_idx < feats.shape[-1]:
+        legal = legal | (feats[..., same_idx] > 0.5)
+    if feasible_idx is not None and feasible_idx < feats.shape[-1]:
+        legal = legal & (feats[..., feasible_idx] > 0.5)
+    if mode == "hard":
+        return transitions.masked_fill(~legal, -1e9)
+    if mode == "soft":
+        return transitions - (~legal).float() * float(penalty)
+    return transitions
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("outputs/checkpoints/gnn_hmm_best.pt"))
@@ -129,6 +158,8 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, default=Path("data/processed/tensors/test_dataset.pt"))
     parser.add_argument("--output", type=Path, default=Path("outputs/matches/gnn_hmm_matches.parquet"))
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--illegal-transition-mode", choices=["none", "soft", "hard"], default="soft")
+    parser.add_argument("--illegal-penalty", type=float, default=5.0)
     args = parser.parse_args()
 
     device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device))
@@ -153,6 +184,8 @@ def main() -> None:
         for item in dataset:
             emissions = model.score_emissions(road_emb, item)
             transitions = model.score_transitions(road_emb, item)
+            if transitions.numel() > 0 and args.illegal_transition_mode != "none":
+                transitions = apply_illegal_transition_adjustment(transitions, item, args.illegal_transition_mode, args.illegal_penalty)
             if transitions.numel() == 0:
                 path = emissions.argmax(dim=-1).detach().cpu().tolist()
                 em_scores = [float(emissions[t, c].cpu()) for t, c in enumerate(path)]

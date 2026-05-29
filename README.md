@@ -24,33 +24,33 @@ Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-st
 
 For each vehicle observation:
 
-> $z_t = (x_t, y_t, \psi_t)$
+> <i>z</i><sub>t</sub> = (<i>x</i><sub>t</sub>, <i>y</i><sub>t</sub>, ψ<sub>t</sub>)
 
 where:
 
-* $x_t, y_t$ are projected vehicle coordinates in meters.
-* $\psi_t$ is the vehicle yaw or heading.
-* $t$ is the trajectory timestep.
+* <i>x</i><sub>t</sub>, <i>y</i><sub>t</sub> are projected vehicle coordinates in meters.
+* ψ<sub>t</sub> is the vehicle yaw or heading.
+* <i>t</i> is the trajectory timestep.
 
 The goal is to predict:
 
-> $\hat{y}_t = (e_t, p_t, c_t)$
+> ŷ<sub>t</sub> = (<i>e</i><sub>t</sub>, <i>p</i><sub>t</sub>, <i>c</i><sub>t</sub>)
 
 where:
 
-* $e_t$ is the matched directed OSM road segment.
-* $p_t$ is the projected point on that segment.
-* $c_t$ is the confidence score.
+* <i>e</i><sub>t</sub> is the matched directed OSM road segment.
+* <i>p</i><sub>t</sub> is the projected point on that segment.
+* <i>c</i><sub>t</sub> is the confidence score.
 
 The final decoded road-segment sequence is obtained by solving:
 
-> $\hat{e}_{1:T} = \arg\max_{e_{1:T}} \left[ \sum_{t=1}^{T} E_\theta(z_t, e_t) + \sum_{t=2}^{T} T_\phi(e_{t-1}, e_t, z_{t-1}, z_t) \right]$
+> ê<sub>1:T</sub> = arg max<sub><i>e</i><sub>1:T</sub></sub> [ Σ<sub>t=1</sub><sup>T</sup> E<sub>θ</sub>(<i>z</i><sub>t</sub>, <i>e</i><sub>t</sub>) + Σ<sub>t=2</sub><sup>T</sup> T<sub>φ</sub>(<i>e</i><sub>t−1</sub>, <i>e</i><sub>t</sub>, <i>z</i><sub>t−1</sub>, <i>z</i><sub>t</sub>) ]
 
 where:
 
-* $E_\theta$ is the learned emission score.
-* $T_\phi$ is the learned transition score.
-* $\hat{e}_{1:T}$ is the globally decoded route over candidate OSM road segments.
+* E<sub>θ</sub> is the learned emission score.
+* T<sub>φ</sub> is the learned transition score.
+* ê<sub>1:T</sub> is the globally decoded route over candidate OSM road segments.
 
 ---
 
@@ -418,7 +418,7 @@ Line graph:
 
 This representation is central to the model because the hidden HMM state is a road segment:
 
-> $s_t = e_t$
+> <i>s</i><sub>t</sub> = <i>e</i><sub>t</sub>
 
 Therefore, every line-graph node corresponds directly to one possible hidden state.
 
@@ -463,11 +463,11 @@ Using sine and cosine avoids angle wraparound errors.
 
 For every vehicle observation:
 
-> $z_t = (x_t, y_t, \psi_t)$
+> <i>z</i><sub>t</sub> = (<i>x</i><sub>t</sub>, <i>y</i><sub>t</sub>, ψ<sub>t</sub>)
 
 One-Direction finds nearby road-segment candidates:
 
-> $C_t = \{e_{t,1}, e_{t,2}, \ldots, e_{t,k}\}$
+> C<sub>t</sub> = {<i>e</i><sub>t,1</sub>, <i>e</i><sub>t,2</sub>, …, <i>e</i><sub>t,k</sub>}
 
 Each candidate stores:
 
@@ -565,13 +565,13 @@ segment_features.pt
 
 The encoder computes an embedding for every directed road segment:
 
-> $h_e = \mathrm{GNN}(x_e, G_{\text{line}})$
+> <i>h</i><sub>e</sub> = GNN(<i>x</i><sub>e</sub>, G<sub>line</sub>)
 
 where:
 
-* $x_e$ is the road-segment feature vector.
-* $G_{\text{line}}$ is the line graph.
-* $h_e$ is the learned road-segment embedding.
+* <i>x</i><sub>e</sub> is the road-segment feature vector.
+* G<sub>line</sub> is the line graph.
+* <i>h</i><sub>e</sub> is the learned road-segment embedding.
 
 Default encoder:
 
@@ -591,7 +591,7 @@ The emission head answers:
 How well does GPS/yaw observation z_t match candidate road segment e?
 ```
 
-For each candidate pair $(z_t, e)$, the model combines:
+For each candidate pair (<i>z</i><sub>t</sub>, <i>e</i>), the model combines:
 
 ```text
 road-segment embedding
@@ -606,9 +606,9 @@ road metadata
 
 The emission score is:
 
-> $E_\theta(z_t, e) = \mathrm{MLP}_{\text{emission}}(r_{t,e})$
+> E<sub>θ</sub>(<i>z</i><sub>t</sub>, <i>e</i>) = MLP<sub>emission</sub>(<i>r</i><sub>t,e</sub>)
 
-where $r_{t,e}$ is the candidate-specific feature vector.
+where <i>r</i><sub>t,e</sub> is the candidate-specific feature vector.
 
 ---
 
@@ -620,7 +620,7 @@ The transition head answers:
 How plausible is it to move from road segment e_i at timestep t-1 to road segment e_j at timestep t?
 ```
 
-For each candidate transition $(e_i, e_j)$, the model combines:
+For each candidate transition (<i>e</i><sub>i</sub>, <i>e</i><sub>j</sub>), the model combines:
 
 ```text
 previous road embedding
@@ -641,7 +641,7 @@ time-feasibility flag
 
 The transition score is:
 
-> $T_\phi(e_i, e_j, z_{t-1}, z_t) = \mathrm{MLP}_{\text{transition}}(q_{i,j,t})$
+> T<sub>φ</sub>(<i>e</i><sub>i</sub>, <i>e</i><sub>j</sub>, <i>z</i><sub>t−1</sub>, <i>z</i><sub>t</sub>) = MLP<sub>transition</sub>(<i>q</i><sub>i,j,t</sub>)
 
 The transition model is learned, but impossible or highly implausible transitions can still be penalized during decoding.
 
@@ -664,21 +664,21 @@ transition scores:
 
 The decoder solves:
 
-> $\hat{e}_{1:T} = \arg\max_{e_t \in C_t} \left[ \sum_{t=1}^{T} E_t(e_t) + \sum_{t=2}^{T} T_t(e_{t-1}, e_t) \right]$
+> ê<sub>1:T</sub> = arg max<sub><i>e</i><sub>t</sub> ∈ C<sub>t</sub></sub> [ Σ<sub>t=1</sub><sup>T</sup> E<sub>t</sub>(<i>e</i><sub>t</sub>) + Σ<sub>t=2</sub><sup>T</sup> T<sub>t</sub>(<i>e</i><sub>t−1</sub>, <i>e</i><sub>t</sub>) ]
 
 Viterbi recurrence:
 
-> $V_1(e) = E_1(e)$
+> V<sub>1</sub>(<i>e</i>) = E<sub>1</sub>(<i>e</i>)
 
-> $V_t(e) = E_t(e) + \max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e', e) \right]$
+> V<sub>t</sub>(<i>e</i>) = E<sub>t</sub>(<i>e</i>) + max<sub><i>e</i>′ ∈ C<sub>t−1</sub></sub> [ V<sub>t−1</sub>(<i>e</i>′) + T<sub>t</sub>(<i>e</i>′, <i>e</i>) ]
 
 Backpointer:
 
-> $B_t(e) = \arg\max_{e' \in C_{t-1}} \left[ V_{t-1}(e') + T_t(e', e) \right]$
+> B<sub>t</sub>(<i>e</i>) = arg max<sub><i>e</i>′ ∈ C<sub>t−1</sub></sub> [ V<sub>t−1</sub>(<i>e</i>′) + T<sub>t</sub>(<i>e</i>′, <i>e</i>) ]
 
 The final road segment is:
 
-> $\hat{e}_T = \arg\max_e V_T(e)$
+> ê<sub>T</sub> = arg max<sub>e</sub> V<sub>T</sub>(<i>e</i>)
 
 The full sequence is recovered by backtracking through the stored backpointers.
 
@@ -690,7 +690,7 @@ The GNN-HMM model trains emission and transition scores jointly.
 
 Given a ground-truth candidate sequence:
 
-> $e_1^{GT}, e_2^{GT}, \ldots, e_T^{GT}$
+> <i>e</i><sub>1</sub><sup>GT</sup>, <i>e</i><sub>2</sub><sup>GT</sup>, …, <i>e</i><sub>T</sub><sup>GT</sup>
 
 the training objective contains:
 
@@ -707,7 +707,7 @@ the training objective contains:
 
 For each GPS observation, the model should rank the GT candidate above the other candidates:
 
-> $\mathcal{L}_{\text{emission}} = -\sum_t \log \frac{ \exp(E_t(e_t^{GT})) }{ \sum_{e \in C_t} \exp(E_t(e)) }$
+> L<sub>emission</sub> = −Σ<sub>t</sub> log( exp(E<sub>t</sub>(<i>e</i><sub>t</sub><sup>GT</sup>)) / Σ<sub>e ∈ C<sub>t</sub></sub> exp(E<sub>t</sub>(<i>e</i>)) )
 
 ---
 
@@ -715,7 +715,7 @@ For each GPS observation, the model should rank the GT candidate above the other
 
 For each consecutive GT transition, the model should rank the correct next candidate above alternative next candidates:
 
-> $\mathcal{L}_{\text{transition}} = -\sum_{t=2}^{T} \log \frac{ \exp(T_t(e_{t-1}^{GT}, e_t^{GT})) }{ \sum_{e \in C_t} \exp(T_t(e_{t-1}^{GT}, e)) }$
+> L<sub>transition</sub> = −Σ<sub>t=2</sub><sup>T</sup> log( exp(T<sub>t</sub>(<i>e</i><sub>t−1</sub><sup>GT</sup>, <i>e</i><sub>t</sub><sup>GT</sup>)) / Σ<sub>e ∈ C<sub>t</sub></sub> exp(T<sub>t</sub>(<i>e</i><sub>t−1</sub><sup>GT</sup>, <i>e</i>)) )
 
 ---
 
@@ -723,7 +723,7 @@ For each consecutive GT transition, the model should rank the correct next candi
 
 The emission loss can include a margin term that forces the GT candidate to score higher than the hardest wrong candidate:
 
-> $\mathcal{L}_{\text{margin}} = \max(0, m - s_{GT} + s_{\text{hard negative}})$
+> L<sub>margin</sub> = max(0, m − s<sub>GT</sub> + s<sub>hard negative</sub>)
 
 This helps the model learn difficult cases such as nearby parallel roads, service roads, ramps, and reverse-direction candidates.
 
@@ -731,7 +731,7 @@ This helps the model learn difficult cases such as nearby parallel roads, servic
 
 ### 12.4 Total loss
 
-> $\mathcal{L} = \lambda_E \mathcal{L}_{\text{emission}} + \lambda_T \mathcal{L}_{\text{transition}} + \lambda_M \mathcal{L}_{\text{margin}}$
+> L = λ<sub>E</sub>L<sub>emission</sub> + λ<sub>T</sub>L<sub>transition</sub> + λ<sub>M</sub>L<sub>margin</sub>
 
 The current training script exposes these weights as command-line arguments.
 

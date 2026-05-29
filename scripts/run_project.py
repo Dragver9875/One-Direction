@@ -4,7 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -15,20 +15,102 @@ class Stage:
     script: str
     description: str
     group: str
-    accepts_config: bool = False
+    default_args: list[str] = field(default_factory=list)
 
 
 STAGES: list[Stage] = [
-    Stage("prepare_trajectories", "01_prepare_trajectories.py", "Parse points.csv, project coordinates, derive yaw and speed", "preprocess"),
-    Stage("prepare_gt_routes", "02_prepare_gt_routes.py", "Parse and project ground_truth.csv route geometries", "preprocess"),
-    Stage("build_osm_graph", "03_build_osm_graph.py", "Build directed OSM road graph", "graph"),
-    Stage("build_line_graph", "04_build_line_graph.py", "Build edge-centric line graph", "graph"),
-    Stage("generate_candidates", "05_generate_candidates.py", "Generate candidate road segments per GPS point", "candidates"),
-    Stage("build_training_tensors", "06_build_training_tensors.py", "Build train/val/test tensor datasets", "tensors"),
-    Stage("train", "07_train_gnn_hmm.py", "Train GNN-HMM model", "train", False),
-    Stage("decode", "08_decode_gnn_hmm.py", "Decode trajectories using trained GNN-HMM", "decode", False),
-    Stage("evaluate", "09_evaluate.py", "Evaluate predictions against GT", "evaluate", False),
-    Stage("visualize", "10_visualize_errors.py", "Generate visualizations and error plots", "visualize", False),
+    Stage(
+        key="prepare_trajectories",
+        script="01_prepare_trajectories.py",
+        description="Parse points.csv, project coordinates, derive yaw and speed",
+        group="preprocess",
+    ),
+    Stage(
+        key="prepare_gt_routes",
+        script="02_prepare_gt_routes.py",
+        description="Parse and project ground_truth.csv route geometries",
+        group="preprocess",
+    ),
+    Stage(
+        key="build_osm_graph",
+        script="03_build_osm_graph.py",
+        description="Build directed OSM road graph",
+        group="graph",
+    ),
+    Stage(
+        key="build_line_graph",
+        script="04_build_line_graph.py",
+        description="Build edge-centric line graph",
+        group="graph",
+    ),
+    Stage(
+        key="generate_candidates",
+        script="05_generate_candidates.py",
+        description="Generate candidate road segments per GPS point",
+        group="candidates",
+    ),
+    Stage(
+        key="build_training_tensors",
+        script="06_build_training_tensors.py",
+        description="Build train/val/test tensor datasets with improved GNN-HMM features",
+        group="tensors",
+        default_args=["--transition-mask-mode", "all"],
+    ),
+    Stage(
+        key="debug_data",
+        script="12_debug_gnn_hmm_data.py",
+        description="Validate tensors, GT candidate positions, transition masks, and graph metadata",
+        group="debug",
+    ),
+    Stage(
+        key="train",
+        script="07_train_gnn_hmm.py",
+        description="Train improved GNN-HMM model",
+        group="train",
+        default_args=[
+            "--output", "outputs/checkpoints",
+            "--epochs", "60",
+            "--batch-size", "2",
+            "--lr", "0.001",
+            "--emission-weight", "1.0",
+            "--transition-weight", "2.0",
+            "--label-smoothing", "0.02",
+            "--margin-weight", "0.1",
+            "--margin", "1.0",
+            "--device", "auto",
+        ],
+    ),
+    Stage(
+        key="decode",
+        script="08_decode_gnn_hmm.py",
+        description="Decode trajectories using trained GNN-HMM with transition penalty",
+        group="decode",
+        default_args=[
+            "--checkpoint", "outputs/checkpoints/gnn_hmm_best.pt",
+            "--output", "outputs/matches/gnn_hmm_matches.parquet",
+            "--illegal-transition-mode", "soft",
+            "--illegal-penalty", "5.0",
+            "--device", "auto",
+        ],
+    ),
+    Stage(
+        key="evaluate",
+        script="09_evaluate.py",
+        description="Evaluate predictions with edge, geometry, same-way, and transition diagnostics",
+        group="evaluate",
+    ),
+    Stage(
+        key="visualize",
+        script="10_visualize_errors.py",
+        description="Generate static error/path visualizations",
+        group="visualize",
+    ),
+    Stage(
+        key="osm_overlay",
+        script="11_visualize_osm_overlay.py",
+        description="Generate interactive OSM-basemap overlay for all decoded trajectories",
+        group="visualize",
+    ),
 ]
 
 
@@ -38,10 +120,14 @@ PIPELINE_ALIASES: dict[str, list[str]] = {
     "graph": ["build_osm_graph", "build_line_graph"],
     "candidates": ["generate_candidates"],
     "tensors": ["build_training_tensors"],
+    "debug": ["debug_data"],
     "train": ["train"],
     "infer": ["decode"],
+    "decode": ["decode"],
     "eval": ["evaluate"],
-    "visualize": ["visualize"],
+    "evaluate": ["evaluate"],
+    "visualize": ["visualize", "osm_overlay"],
+    "post": ["evaluate", "visualize", "osm_overlay"],
     "data": [
         "prepare_trajectories",
         "prepare_gt_routes",
@@ -49,22 +135,39 @@ PIPELINE_ALIASES: dict[str, list[str]] = {
         "build_line_graph",
         "generate_candidates",
         "build_training_tensors",
+        "debug_data",
     ],
     "model": ["train", "decode", "evaluate"],
-    "post": ["evaluate", "visualize"],
+    "post": ["evaluate", "visualize", "osm_overlay"],
     "smoke": [
         "prepare_trajectories",
         "prepare_gt_routes",
         "build_osm_graph",
         "build_line_graph",
         "generate_candidates",
+        "build_training_tensors",
+        "debug_data",
+    ],
+    "gpu_e2e": [
+        "prepare_trajectories",
+        "prepare_gt_routes",
+        "build_osm_graph",
+        "build_line_graph",
+        "generate_candidates",
+        "build_training_tensors",
+        "debug_data",
+        "train",
+        "decode",
+        "evaluate",
+        "visualize",
+        "osm_overlay",
     ],
 }
 
 
 def find_repo_root(start: Path | None = None) -> Path:
     current = (start or Path(__file__)).resolve()
-
+    
     if current.is_file():
         current = current.parent
 
@@ -81,7 +184,7 @@ def stage_by_key() -> dict[str, Stage]:
 
 def resolve_stage_keys(selection: list[str]) -> list[str]:
     if not selection:
-        selection = ["all"]
+        selection = ["gpu_e2e"]
 
     known = stage_by_key()
     resolved: list[str] = []
@@ -124,16 +227,26 @@ def make_env(repo_root: Path) -> dict[str, str]:
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
     root_text = str(repo_root)
+    env["PYTHONPATH"] = root_text + (os.pathsep + existing if existing else "")
 
-    if existing:
-        env["PYTHONPATH"] = root_text + os.pathsep + existing
-    else:
-        env["PYTHONPATH"] = root_text
+    conda_prefix = env.get("CONDA_PREFIX")
+    if conda_prefix:
+        gdal_data = Path(conda_prefix) / "Library" / "share" / "gdal"
+        proj_lib = Path(conda_prefix) / "Library" / "share" / "proj"
+        if gdal_data.exists() and "GDAL_DATA" not in env:
+            env["GDAL_DATA"] = str(gdal_data)
+        if proj_lib.exists() and "PROJ_LIB" not in env:
+            env["PROJ_LIB"] = str(proj_lib)
 
     return env
 
 
-def run_command(command: list[str], repo_root: Path, log_path: Path, dry_run: bool = False) -> int:
+def run_command(
+    command: list[str],
+    repo_root: Path,
+    log_path: Path,
+    dry_run: bool = False,
+) -> int:
     print("")
     print("Command:")
     print(" ".join(command))
@@ -177,36 +290,54 @@ def run_command(command: list[str], repo_root: Path, log_path: Path, dry_run: bo
     return return_code
 
 
+def merge_stage_args(stage: Stage, extra_args: list[str], no_defaults: bool) -> list[str]:
+    if no_defaults:
+        return list(extra_args)
+    return list(stage.default_args) + list(extra_args)
+
+
 def build_stage_command(
     python_executable: str,
     repo_root: Path,
     stage: Stage,
-    config: str | None,
-    passthrough_args: list[str],
+    extra_args: list[str],
+    no_stage_defaults: bool,
 ) -> list[str]:
     script_path = repo_root / "scripts" / stage.script
 
     if not script_path.exists():
         raise FileNotFoundError(f"Stage script not found: {script_path}")
 
-    command = [python_executable, str(script_path)]
-
-    if stage.accepts_config and config:
-        command.extend(["--config", config])
-
-    if passthrough_args:
-        command.extend(passthrough_args)
-
-    return command
+    return [
+        python_executable,
+        str(script_path),
+        *merge_stage_args(stage, extra_args, no_stage_defaults),
+    ]
 
 
-def verify_required_inputs(repo_root: Path, require_osm: bool = False) -> None:
+def verify_required_inputs(repo_root: Path, selected: list[str]) -> None:
     required = [
         repo_root / "data" / "raw" / "trajectories" / "points.csv",
         repo_root / "data" / "raw" / "trajectories" / "ground_truth.csv",
     ]
 
-    if require_osm:
+    needs_osm = any(
+        key in selected
+        for key in [
+            "build_osm_graph",
+            "build_line_graph",
+            "generate_candidates",
+            "build_training_tensors",
+            "debug_data",
+            "train",
+            "decode",
+            "evaluate",
+            "visualize",
+            "osm_overlay",
+        ]
+    )
+
+    if needs_osm:
         required.append(repo_root / "data" / "raw" / "osm" / "oberfranken-latest.osm.pbf")
 
     missing = [path for path in required if not path.exists()]
@@ -216,19 +347,22 @@ def verify_required_inputs(repo_root: Path, require_osm: bool = False) -> None:
         raise FileNotFoundError(f"Missing required input files:\n{joined}")
 
 
-def print_plan(stage_keys: list[str]) -> None:
+def print_plan(stage_keys: list[str], no_stage_defaults: bool) -> None:
     known = stage_by_key()
     print("")
     print("Execution plan:")
     for idx, key in enumerate(stage_keys, start=1):
         stage = known[key]
-        print(f"  {idx:02d}. {stage.key} - {stage.description}")
+        default_text = "" if no_stage_defaults or not stage.default_args else f" | defaults: {' '.join(stage.default_args)}"
+        print(f"  {idx:02d}. {stage.key} - {stage.description}{default_text}")
 
 
 def print_stage_list() -> None:
     print("Available stages:")
     for stage in STAGES:
+        defaults = " ".join(stage.default_args) if stage.default_args else "-"
         print(f"  {stage.key:<24} {stage.group:<12} {stage.description}")
+        print(f"  {'':<24} {'defaults:':<12} {defaults}")
 
     print("")
     print("Available groups:")
@@ -239,17 +373,22 @@ def print_stage_list() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified One-Direction pipeline runner.")
 
-    parser.add_argument("stages", nargs="*", help="Stage keys or groups to run. Default: all.")
-    parser.add_argument("--config", default="configs/local.yaml", help="Config path passed to train/decode/evaluate/visualize stages.")
+    parser.add_argument("stages", nargs="*", help="Stage keys or groups to run. Default: gpu_e2e.")
     parser.add_argument("--from-stage", default=None, help="Start from this stage key after resolving selection.")
     parser.add_argument("--to-stage", default=None, help="Stop at this stage key after resolving selection.")
     parser.add_argument("--python", default=sys.executable, help="Python executable to use for child scripts.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
     parser.add_argument("--continue-on-error", action="store_true", help="Continue running later stages even if one stage fails.")
-    parser.add_argument("--skip-input-check", action="store_true", help="Skip checking for points.csv, ground_truth.csv, and OSM PBF.")
+    parser.add_argument("--skip-input-check", action="store_true", help="Skip raw input checks.")
     parser.add_argument("--list", action="store_true", help="List available stages and groups.")
     parser.add_argument("--log-dir", default="outputs/run_logs", help="Directory where stage logs are written.")
-    parser.add_argument("--stage-args", nargs=argparse.REMAINDER, default=[], help="Extra arguments appended to every selected stage after --stage-args.")
+    parser.add_argument("--no-stage-defaults", action="store_true", help="Run scripts without stage-specific default arguments.")
+    parser.add_argument(
+        "--stage-args",
+        nargs=argparse.REMAINDER,
+        default=[],
+        help="Extra arguments appended to every selected stage after --stage-args.",
+    )
 
     return parser.parse_args()
 
@@ -269,23 +408,10 @@ def main() -> int:
         raise RuntimeError("No stages selected.")
 
     if not args.skip_input_check:
-        needs_osm = any(
-            key in selected
-            for key in [
-                "build_osm_graph",
-                "build_line_graph",
-                "generate_candidates",
-                "build_training_tensors",
-                "train",
-                "decode",
-                "evaluate",
-                "visualize",
-            ]
-        )
-        verify_required_inputs(repo_root, require_osm=needs_osm)
+        verify_required_inputs(repo_root, selected)
 
     print(f"Repository root: {repo_root}")
-    print_plan(selected)
+    print_plan(selected, no_stage_defaults=args.no_stage_defaults)
 
     known = stage_by_key()
     log_dir = repo_root / args.log_dir
@@ -303,8 +429,8 @@ def main() -> int:
             python_executable=args.python,
             repo_root=repo_root,
             stage=stage,
-            config=args.config,
-            passthrough_args=args.stage_args,
+            extra_args=args.stage_args,
+            no_stage_defaults=args.no_stage_defaults,
         )
 
         log_path = log_dir / f"{timestamp}_{stage.key}.log"

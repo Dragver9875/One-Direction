@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 try:
     from torch_geometric.nn import GATConv, SAGEConv
-except ImportError as exc:  # pragma: no cover
+except ImportError as exc:
     raise ImportError("torch-geometric is required. Install torch-geometric for your PyTorch/CUDA version.") from exc
 
 

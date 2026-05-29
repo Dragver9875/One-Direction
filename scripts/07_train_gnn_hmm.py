@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +17,7 @@ from torch.utils.data import DataLoader
 
 try:
     from torch_geometric.nn import GATConv, SAGEConv
-except ImportError as exc:
+except ImportError as exc:  # pragma: no cover
     raise ImportError("torch-geometric is required. Install torch-geometric for your PyTorch/CUDA version.") from exc
 
 
@@ -42,10 +44,9 @@ def resolve_checkpoint_paths(output: Path) -> tuple[Path, Path, Path]:
         checkpoint_dir = output.parent
         best_path = output
         if output.name.endswith("_best.pt"):
-            last_name = output.name.replace("_best.pt", "_last.pt")
+            last_path = output.with_name(output.name.replace("_best.pt", "_last.pt"))
         else:
-            last_name = output.stem + "_last.pt"
-        last_path = output.with_name(last_name)
+            last_path = output.with_name(output.stem + "_last.pt")
     else:
         checkpoint_dir = output
         best_path = checkpoint_dir / "gnn_hmm_best.pt"
@@ -145,18 +146,27 @@ class OneDirectionModel(nn.Module):
         return logits.masked_fill(~trans_mask, -1e9)
 
 
-def emission_loss(logits: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+def emission_loss(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: float = 0.0, margin_weight: float = 0.0, margin: float = 1.0) -> tuple[torch.Tensor, int, int]:
     valid = labels >= 0
     if valid.sum() == 0:
         return logits.sum() * 0.0, 0, 0
-    loss = F.cross_entropy(logits[valid], labels[valid].to(logits.device))
-    pred = logits[valid].argmax(dim=-1)
+    scores = logits[valid]
+    target = labels[valid].to(logits.device)
+    loss = F.cross_entropy(scores, target, label_smoothing=label_smoothing)
+    if margin_weight > 0:
+        gt_scores = scores.gather(1, target.view(-1, 1)).squeeze(1)
+        masked = scores.clone()
+        masked.scatter_(1, target.view(-1, 1), -1e9)
+        hardest_neg = masked.max(dim=1).values
+        margin_loss = F.relu(margin - gt_scores + hardest_neg).mean()
+        loss = loss + margin_weight * margin_loss
+    pred = scores.argmax(dim=-1)
     correct = int((pred.cpu() == labels[valid]).sum().item())
     total = int(valid.sum().item())
     return loss, correct, total
 
 
-def transition_loss(logits: torch.Tensor, labels: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+def transition_loss(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: float = 0.0) -> tuple[torch.Tensor, int, int]:
     if logits.numel() == 0 or labels.numel() < 2:
         return logits.sum() * 0.0, 0, 0
     prev = labels[:-1]
@@ -168,7 +178,7 @@ def transition_loss(logits: torch.Tensor, labels: torch.Tensor) -> tuple[torch.T
     for ti in torch.where(valid)[0].tolist():
         row = logits[ti, int(prev[ti])]  # [K]
         target = curr[ti].view(1).to(row.device)
-        losses.append(F.cross_entropy(row.view(1, -1), target))
+        losses.append(F.cross_entropy(row.view(1, -1), target, label_smoothing=label_smoothing))
         correct += int(row.argmax().cpu().item() == int(curr[ti]))
         total += 1
     if not losses:
@@ -195,7 +205,7 @@ def viterbi_decode(emissions: torch.Tensor, transitions: torch.Tensor) -> list[i
     return list(reversed(path))
 
 
-def run_epoch(model, road_x, edge_index, loader, optimizer, device, train: bool, transition_weight: float) -> dict:
+def run_epoch(model, road_x, edge_index, loader, optimizer, device, train: bool, transition_weight: float, emission_weight: float, label_smoothing: float, margin_weight: float, margin: float, grad_clip_norm: float) -> dict:
     model.train(train)
     total_loss = 0.0
     em_correct = em_total = tr_correct = tr_total = 0
@@ -210,9 +220,9 @@ def run_epoch(model, road_x, edge_index, loader, optimizer, device, train: bool,
             labels = item["gt_candidate_pos"].to(device)
             emissions = model.score_emissions(road_emb, item)
             transitions = model.score_transitions(road_emb, item)
-            le, c, n = emission_loss(emissions, labels)
-            lt, tc, tn = transition_loss(transitions, labels)
-            batch_losses.append(le + transition_weight * lt)
+            le, c, n = emission_loss(emissions, labels, label_smoothing=label_smoothing, margin_weight=margin_weight, margin=margin)
+            lt, tc, tn = transition_loss(transitions, labels, label_smoothing=label_smoothing)
+            batch_losses.append(emission_weight * le + transition_weight * lt)
             em_correct += c
             em_total += n
             tr_correct += tc
@@ -228,7 +238,7 @@ def run_epoch(model, road_x, edge_index, loader, optimizer, device, train: bool,
         loss = torch.stack(batch_losses).mean()
         if train:
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
         total_loss += float(loss.detach().cpu().item())
         n_batches += 1
@@ -245,12 +255,17 @@ def main() -> None:
     parser.add_argument("--line-graph", type=Path, default=Path("data/processed/line_graph/line_graph.pt"))
     parser.add_argument("--train", type=Path, default=Path("data/processed/tensors/train_dataset.pt"))
     parser.add_argument("--val", type=Path, default=Path("data/processed/tensors/val_dataset.pt"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/checkpoints"), help="Checkpoint directory or explicit best-checkpoint file path.")
+    parser.add_argument("--output", type=Path, default=Path("outputs/checkpoints"))
     parser.add_argument("--report", type=Path, default=Path("data/reports/training_report.json"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--emission-weight", type=float, default=1.0)
     parser.add_argument("--transition-weight", type=float, default=1.0)
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument("--margin-weight", type=float, default=0.0)
+    parser.add_argument("--margin", type=float, default=1.0)
+    parser.add_argument("--grad-clip-norm", type=float, default=5.0)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--gnn-type", choices=["graphsage", "gat"], default="graphsage")
     parser.add_argument("--device", default="auto")
@@ -287,9 +302,9 @@ def main() -> None:
     best_score = -1.0
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = run_epoch(model, road_x, edge_index, train_loader, optimizer, device, True, args.transition_weight)
+        train_metrics = run_epoch(model, road_x, edge_index, train_loader, optimizer, device, True, args.transition_weight, args.emission_weight, args.label_smoothing, args.margin_weight, args.margin, args.grad_clip_norm)
         with torch.no_grad():
-            val_metrics = run_epoch(model, road_x, edge_index, val_loader, optimizer, device, False, args.transition_weight)
+            val_metrics = run_epoch(model, road_x, edge_index, val_loader, optimizer, device, False, args.transition_weight, args.emission_weight, args.label_smoothing, args.margin_weight, args.margin, args.grad_clip_norm)
         row = {"epoch": epoch, "train": train_metrics, "val": val_metrics}
         history.append(row)
         print(
@@ -305,6 +320,7 @@ def main() -> None:
             "emission_feat_dim": em_feat_dim,
             "transition_feat_dim": tr_feat_dim,
             "gnn_type": args.gnn_type,
+            "train_args": vars(args),
             "epoch": epoch,
             "val_metrics": val_metrics,
         }

@@ -145,12 +145,16 @@ class OneDirectionModel(nn.Module):
 
 
 def emission_loss(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: float = 0.0, margin_weight: float = 0.0, margin: float = 1.0) -> tuple[torch.Tensor, int, int]:
+    labels = labels.to(logits.device)
     valid = labels >= 0
     if valid.sum() == 0:
         return logits.sum() * 0.0, 0, 0
+
     scores = logits[valid]
-    target = labels[valid].to(logits.device)
+    target = labels[valid].long()
+
     loss = F.cross_entropy(scores, target, label_smoothing=label_smoothing)
+
     if margin_weight > 0:
         gt_scores = scores.gather(1, target.view(-1, 1)).squeeze(1)
         masked = scores.clone()
@@ -158,9 +162,10 @@ def emission_loss(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: f
         hardest_neg = masked.max(dim=1).values
         margin_loss = F.relu(margin - gt_scores + hardest_neg).mean()
         loss = loss + margin_weight * margin_loss
+
     pred = scores.argmax(dim=-1)
-    correct = int((pred.cpu() == labels[valid]).sum().item())
-    total = int(valid.sum().item())
+    correct = int((pred == target).sum().detach().cpu().item())
+    total = int(target.numel())
     return loss, correct, total
 
 

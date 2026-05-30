@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 try:
     from torch_geometric.nn import GATConv, SAGEConv
-except ImportError as exc:
+except ImportError as exc:  # pragma: no cover
     raise ImportError("torch-geometric is required. Install torch-geometric for your PyTorch/CUDA version.") from exc
 
 
@@ -29,6 +29,19 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def print_json_flush(prefix: str, data: dict) -> None:
+    serializable = {}
+    for key, value in data.items():
+        try:
+            if hasattr(value, "item"):
+                value = value.item()
+            serializable[key] = value
+        except Exception:
+            serializable[key] = str(value)
+
+    print(prefix + json.dumps(serializable, indent=2), flush=True)
 
 
 def choose_device(device_arg: str) -> torch.device:
@@ -305,11 +318,14 @@ def main() -> None:
     best_score = -1.0
 
     for epoch in range(1, args.epochs + 1):
+        print(f"[train] Starting epoch {epoch}/{args.epochs}", flush=True)
         train_metrics = run_epoch(model, road_x, edge_index, train_loader, optimizer, device, True, args.transition_weight, args.emission_weight, args.label_smoothing, args.margin_weight, args.margin, args.grad_clip_norm)
         with torch.no_grad():
             val_metrics = run_epoch(model, road_x, edge_index, val_loader, optimizer, device, False, args.transition_weight, args.emission_weight, args.label_smoothing, args.margin_weight, args.margin, args.grad_clip_norm)
         row = {"epoch": epoch, "train": train_metrics, "val": val_metrics}
         history.append(row)
+        print(f"[train] Finished epoch {epoch}/{args.epochs}", flush=True)
+        print_json_flush("[metrics] ", row)
         print(
             f"[Epoch {epoch:03d}] "
             f"train_loss={train_metrics['loss']:.4f} val_loss={val_metrics['loss']:.4f} "

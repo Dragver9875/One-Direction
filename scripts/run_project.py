@@ -138,7 +138,7 @@ PIPELINE_ALIASES: dict[str, list[str]] = {
         "debug_data",
     ],
     "model": ["train", "decode", "evaluate"],
-    "post": ["evaluate", "visualize", "osm_overlay"],
+
     "smoke": [
         "prepare_trajectories",
         "prepare_gt_routes",
@@ -167,7 +167,7 @@ PIPELINE_ALIASES: dict[str, list[str]] = {
 
 def find_repo_root(start: Path | None = None) -> Path:
     current = (start or Path(__file__)).resolve()
-    
+
     if current.is_file():
         current = current.parent
 
@@ -228,6 +228,7 @@ def make_env(repo_root: Path) -> dict[str, str]:
     existing = env.get("PYTHONPATH", "")
     root_text = str(repo_root)
     env["PYTHONPATH"] = root_text + (os.pathsep + existing if existing else "")
+    env["PYTHONUNBUFFERED"] = "1"
 
     conda_prefix = env.get("CONDA_PREFIX")
     if conda_prefix:
@@ -280,8 +281,9 @@ def run_command(
             raise RuntimeError("Failed to capture subprocess output.")
 
         for line in process.stdout:
-            print(line, end="")
+            print(line, end="", flush=True)
             log_file.write(line)
+            log_file.flush()
 
         return_code = process.wait()
         log_file.write(f"\nFinished: {datetime.now().isoformat()}\n")
@@ -310,6 +312,7 @@ def build_stage_command(
 
     return [
         python_executable,
+        "-u",
         str(script_path),
         *merge_stage_args(stage, extra_args, no_stage_defaults),
     ]

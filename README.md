@@ -18,6 +18,8 @@ Output:
 
 Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-structured sequence-decoding problem**. The OSM road network is converted into a directed road graph, then into an edge-centric line graph. A Graph Neural Network learns contextual road-segment embeddings, and a custom HMM/Viterbi decoder uses learned emission and transition scores to recover the most likely route.
 
+The current primary workflow is the **GNN-HMM pipeline**. The repository also contains experimental reinforcement-learning branches under `RL/` and `D-SAC/`, but these are treated as secondary research extensions and should be compared against the GNN-HMM baseline only after the GNN-HMM pipeline is fully trained and evaluated.
+
 ---
 
 ## 1. Core idea
@@ -138,6 +140,21 @@ Projected points + confidence scores
     ↓
 Evaluation + visual debugging
 ```
+
+The intended workflow is:
+
+```text
+Primary:
+    GNN-HMM + Viterbi
+
+Experimental:
+    PPO + Asymmetric Privileged Learning
+
+Advanced experimental:
+    Discrete SAC + Asymmetric Privileged Learning
+```
+
+The GNN-HMM pipeline should be treated as the main system because it performs explicit global sequence decoding over the candidate lattice.
 
 ---
 
@@ -269,7 +286,34 @@ One-Direction/
 │   └── run_logs/
 │
 ├── RL/
-│   └── future PPO + asymmetric privileged learning extension
+│   ├── README.md
+│   ├── requirements-rl.txt
+│   ├── pyproject.toml
+│   ├── .gitignore
+│   ├── configs/
+│   │   ├── ppo_default.yaml
+│   │   ├── ppo_debug.yaml
+│   │   └── ppo_cpu.yaml
+│   ├── scripts/
+│   ├── src/
+│   │   └── onedir_ppo/
+│   ├── tests/
+│   └── outputs/
+│
+├── D-SAC/
+│   ├── README.md
+│   ├── requirements-dsac.txt
+│   ├── pyproject.toml
+│   ├── .gitignore
+│   ├── configs/
+│   │   ├── dsac_default.yaml
+│   │   ├── dsac_debug.yaml
+│   │   └── dsac_cpu.yaml
+│   ├── scripts/
+│   ├── src/
+│   │   └── onedir_dsac/
+│   ├── tests/
+│   └── outputs/
 │
 └── tests/
     ├── test_geometry.py
@@ -537,6 +581,22 @@ Emission features describe how well one GPS/yaw observation matches one candidat
 
 Transition features describe how plausible it is to move from one candidate segment to another between consecutive timesteps.
 
+The current tensor builder supports transition mask modes:
+
+```text
+all      Keep all candidate-to-candidate transitions available.
+legal    Keep only graph-legal or same-edge transitions.
+speed    Keep graph-legal transitions that also satisfy a speed-feasibility check.
+```
+
+The recommended first setting is:
+
+```text
+all
+```
+
+Stricter transition masks should be tested only after confirming that GT transitions remain valid in the debug report.
+
 ---
 
 ## 11. Model architecture
@@ -737,7 +797,54 @@ The current training script exposes these weights as command-line arguments.
 
 ---
 
-## 13. Evaluation metrics
+## 13. Training implementation details
+
+The current training script is:
+
+```text
+scripts/07_train_gnn_hmm.py
+```
+
+It includes several important training safeguards:
+
+```text
+1. Mask-aware cross-entropy
+2. Mask-aware label smoothing
+3. Valid-candidate-only hard-negative margin loss
+4. Separate emission and transition loss logging
+5. Viterbi candidate accuracy tracking
+6. Live PowerShell logging through unbuffered execution
+7. Best-checkpoint selection by validation Viterbi candidate accuracy
+```
+
+The mask-aware loss is important because invalid or padded candidates are assigned very negative scores. Standard label smoothing over those masked classes can create unstable loss values. The patched training script distributes label-smoothing probability only over valid candidates.
+
+The logged training fields include:
+
+```text
+loss
+emission_loss
+emission_ce_loss
+emission_margin_loss
+transition_loss
+weighted_emission_loss
+weighted_transition_loss
+emission_acc
+transition_acc
+viterbi_candidate_acc
+emission_supervised_total
+emission_supervised_used
+emission_supervised_skipped
+transition_supervised_total
+transition_supervised_used
+transition_supervised_skipped
+```
+
+This makes it possible to identify whether training issues are caused by emission scoring, transition scoring, margin loss, skipped labels, or decoder behavior.
+
+---
+
+## 14. Evaluation metrics
 
 The evaluation script reports both strict edge-ID metrics and geometry-aware diagnostics.
 
@@ -791,11 +898,11 @@ GT/OSM alignment issues
 
 ---
 
-## 14. Visualization
+## 15. Visualization
 
 One-Direction includes two visualization modes.
 
-### 14.1 Static error visualization
+### 15.1 Static error visualization
 
 Script:
 
@@ -815,7 +922,7 @@ Output:
 outputs/figures/
 ```
 
-### 14.2 Interactive OSM overlay
+### 15.2 Interactive OSM overlay
 
 Script:
 
@@ -853,13 +960,15 @@ python scripts\11_visualize_osm_overlay.py
 
 ---
 
-## 15. Unified pipeline runner
+## 16. Unified pipeline runner
 
 The project includes a unified runner:
 
 ```text
 scripts/run_project.py
 ```
+
+The runner uses explicit stage-level command-line defaults. Training settings such as epoch count are controlled through `scripts/run_project.py` defaults or through a direct training command, not through `configs/local.yaml` unless script-level config support is later added.
 
 List available stages:
 
@@ -899,7 +1008,7 @@ python scripts\run_project.py post
 
 ---
 
-## 16. Manual pipeline commands
+## 17. Manual GNN-HMM pipeline commands
 
 Run commands from the repository root:
 
@@ -907,59 +1016,43 @@ Run commands from the repository root:
 cd E:\PANDA\One-Direction
 ```
 
-### 16.1 Prepare trajectories
+### 17.1 Prepare trajectories
 
 ```powershell
 python scripts\01_prepare_trajectories.py
 ```
 
-### 16.2 Prepare GT routes
+### 17.2 Prepare GT routes
 
 ```powershell
 python scripts\02_prepare_gt_routes.py
 ```
 
-### 16.3 Build directed OSM graph
+### 17.3 Build directed OSM graph
 
 ```powershell
 python scripts\03_build_osm_graph.py
 ```
 
-### 16.4 Build line graph
+### 17.4 Build line graph
 
 ```powershell
 python scripts\04_build_line_graph.py
 ```
 
-### 16.5 Generate candidates
+### 17.5 Generate candidates
 
 ```powershell
 python scripts\05_generate_candidates.py
 ```
 
-### 16.6 Build improved training tensors
+### 17.6 Build improved training tensors
 
 ```powershell
 python scripts\06_build_training_tensors.py --transition-mask-mode all
 ```
 
-Available transition mask modes:
-
-```text
-all      Keep all candidate-to-candidate transitions available.
-legal    Keep only graph-legal or same-edge transitions.
-speed    Keep graph-legal transitions that also satisfy a speed-feasibility check.
-```
-
-The recommended first mode is:
-
-```text
-all
-```
-
-After verifying GT transition validity, stricter modes can be tested.
-
-### 16.7 Run data-debug checks
+### 17.7 Run data-debug checks
 
 ```powershell
 python scripts\12_debug_gnn_hmm_data.py
@@ -984,10 +1077,10 @@ road-class distribution
 candidate recall by trajectory
 ```
 
-### 16.8 Train GNN-HMM
+### 17.8 Train GNN-HMM
 
 ```powershell
-python scripts\07_train_gnn_hmm.py `
+python -u scripts\07_train_gnn_hmm.py `
   --output outputs\checkpoints `
   --epochs 100 `
   --batch-size 2 `
@@ -997,7 +1090,8 @@ python scripts\07_train_gnn_hmm.py `
   --label-smoothing 0.02 `
   --margin-weight 0.1 `
   --margin 1.0 `
-  --device auto
+  --device auto `
+  --log-every-batches 25
 ```
 
 Output:
@@ -1008,7 +1102,7 @@ outputs/checkpoints/gnn_hmm_last.pt
 data/reports/training_report.json
 ```
 
-### 16.9 Decode
+### 17.9 Decode
 
 ```powershell
 python scripts\08_decode_gnn_hmm.py `
@@ -1033,7 +1127,7 @@ Recommended first mode:
 soft
 ```
 
-### 16.10 Evaluate
+### 17.10 Evaluate
 
 ```powershell
 python scripts\09_evaluate.py
@@ -1047,13 +1141,13 @@ outputs/metrics/trajectory_metrics.csv
 outputs/metrics/error_cases.csv
 ```
 
-### 16.11 Visualize static errors
+### 17.11 Visualize static errors
 
 ```powershell
 python scripts\10_visualize_errors.py
 ```
 
-### 16.12 Generate OSM overlay
+### 17.12 Generate OSM overlay
 
 ```powershell
 python scripts\11_visualize_osm_overlay.py
@@ -1061,9 +1155,9 @@ python scripts\11_visualize_osm_overlay.py
 
 ---
 
-## 17. Local GPU workflow
+## 18. Local GPU workflow
 
-### 17.1 Activate environment
+### 18.1 Activate environment
 
 If Conda is available directly:
 
@@ -1084,15 +1178,16 @@ Or run with the environment Python directly:
 E:\Anaconda3\envs\one-direction\python.exe scripts\run_project.py gpu_e2e
 ```
 
-### 17.2 Set geospatial environment variables
+### 18.2 Set geospatial environment variables
 
 ```powershell
 $env:PYTHONPATH="E:\PANDA\One-Direction"
 $env:GDAL_DATA="$env:CONDA_PREFIX\Library\share\gdal"
 $env:PROJ_LIB="$env:CONDA_PREFIX\Library\share\proj"
+$env:PYTHONUNBUFFERED="1"
 ```
 
-### 17.3 Verify GPU and dependencies
+### 18.3 Verify GPU and dependencies
 
 ```powershell
 python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
@@ -1100,15 +1195,30 @@ python -c "import geopandas, shapely, pyproj, osmnx; print('geo stack ok')"
 python -c "import src; print(src.__project__, src.__version__)"
 ```
 
-### 17.4 Start end-to-end run
+### 18.4 Start end-to-end run
 
 ```powershell
 python scripts\run_project.py gpu_e2e
 ```
 
+### 18.5 GPU safety note
+
+Do not run GNN-HMM training and RL/D-SAC GPU training at the same time on the same GPU.
+
+The GNN-HMM training job repeatedly encodes the full line graph and should be given exclusive GPU access. Running an RL job in parallel can cause memory fragmentation, CUDA instability, or illegal memory access errors.
+
+Recommended order:
+
+```text
+1. Train GNN-HMM.
+2. Decode and evaluate GNN-HMM.
+3. Run PPO or D-SAC separately.
+4. Use CPU configs for RL experiments if the GPU is occupied.
+```
+
 ---
 
-## 18. Debugging checklist
+## 19. Debugging checklist
 
 Before judging model quality, verify the following:
 
@@ -1124,6 +1234,9 @@ Before judging model quality, verify the following:
 9. Transition mask does not incorrectly reject GT transitions.
 10. Edge IDs and edge indices are unique and stable.
 11. Prediction errors are classified into true wrong-road, same-way, reverse-edge, and near-geometry cases.
+12. Training loss is decomposed into emission and transition components.
+13. Supervised labels are not unexpectedly skipped.
+14. GNN-HMM and RL jobs are not running concurrently on the same GPU.
 ```
 
 Important debug scripts:
@@ -1133,9 +1246,213 @@ python scripts\12_debug_gnn_hmm_data.py
 python scripts\11_visualize_osm_overlay.py
 ```
 
+Additional direct checks:
+
+```powershell
+python -m py_compile scripts\07_train_gnn_hmm.py
+python -m py_compile scripts\run_project.py
+```
+
+For CUDA debugging:
+
+```powershell
+$env:CUDA_LAUNCH_BLOCKING="1"
+```
+
+Use this only for short diagnostic runs because it slows training.
+
 ---
 
-## 19. Recommended development order
+## 20. Experimental RL branch: PPO + Asymmetric Privileged Learning
+
+The PPO branch is located at:
+
+```text
+RL/
+```
+
+This branch treats map matching as a sequential decision problem:
+
+```text
+episode = one trajectory
+step    = one GPS observation
+action  = choose one candidate road segment
+```
+
+The PPO actor uses deployment-safe features:
+
+```text
+candidate features
+candidate mask
+previous selected candidate
+timestep fraction
+```
+
+The privileged critic additionally uses training-only information:
+
+```text
+GT candidate position
+GT route/candidate hints
+previous and next GT-transition hints
+projection-to-GT hints
+candidate validity hints
+```
+
+At inference time, only the actor is used.
+
+### 20.1 PPO setup
+
+Install dependencies:
+
+```powershell
+python -m pip install -r RL\requirements-rl.txt
+```
+
+Check inputs:
+
+```powershell
+python RL\scripts\00_check_inputs.py --config RL\configs\ppo_default.yaml
+```
+
+Run debug workflow:
+
+```powershell
+python RL\scripts\run_rl.py all --config RL\configs\ppo_debug.yaml
+```
+
+Run default workflow:
+
+```powershell
+python RL\scripts\run_rl.py all --config RL\configs\ppo_default.yaml
+```
+
+Run CPU workflow:
+
+```powershell
+python RL\scripts\run_rl.py all --config RL\configs\ppo_cpu.yaml
+```
+
+Expected outputs:
+
+```text
+RL/outputs/checkpoints/bc_actor.pt
+RL/outputs/checkpoints/ppo_asym_best.pt
+RL/outputs/checkpoints/ppo_asym_last.pt
+RL/outputs/matches/ppo_asym_matches.parquet
+RL/outputs/metrics/ppo_asym_metrics.json
+RL/outputs/reports/ppo_training_report.json
+```
+
+PPO is useful as a reinforcement-learning baseline, but it should not replace the GNN-HMM unless it improves both point-level matching and route-level quality.
+
+---
+
+## 21. Experimental RL branch: Discrete SAC + Asymmetric Privileged Learning
+
+The Discrete SAC branch is located at:
+
+```text
+D-SAC/
+```
+
+This branch uses:
+
+```text
+Behavior cloning warm-start
+Masked categorical actor
+Double Q critics
+Target critics
+Replay buffer
+Automatic entropy temperature alpha
+Discrete SAC objective
+Asymmetric privileged critic input
+Greedy/stochastic policy evaluation
+```
+
+The actor receives only deployment-safe observations. The two critics receive privileged training-only information in addition to actor observations.
+
+### 21.1 D-SAC setup
+
+Install dependencies:
+
+```powershell
+python -m pip install -r D-SAC\requirements-dsac.txt
+```
+
+Check inputs:
+
+```powershell
+python D-SAC\scripts\00_check_inputs.py --config D-SAC\configs\dsac_default.yaml
+```
+
+Run debug workflow:
+
+```powershell
+python D-SAC\scripts\run_dsac.py all --config D-SAC\configs\dsac_debug.yaml
+```
+
+Run default workflow:
+
+```powershell
+python D-SAC\scripts\run_dsac.py all --config D-SAC\configs\dsac_default.yaml
+```
+
+Run CPU workflow:
+
+```powershell
+python D-SAC\scripts\run_dsac.py all --config D-SAC\configs\dsac_cpu.yaml
+```
+
+Expected outputs:
+
+```text
+D-SAC/outputs/checkpoints/bc_actor.pt
+D-SAC/outputs/checkpoints/dsac_asym_best.pt
+D-SAC/outputs/checkpoints/dsac_asym_last.pt
+D-SAC/outputs/matches/dsac_asym_matches.parquet
+D-SAC/outputs/metrics/dsac_asym_metrics.json
+D-SAC/outputs/reports/dsac_training_report.json
+```
+
+D-SAC is the advanced RL extension. It should be compared against PPO and GNN-HMM after its reward scale, replay behavior, entropy coefficient, and critic stability are validated.
+
+---
+
+## 22. Comparing GNN-HMM, PPO, and D-SAC
+
+The recommended comparison hierarchy is:
+
+```text
+1. Candidate Top-1 baseline
+2. GNN-HMM emission-only behavior
+3. GNN-HMM + Viterbi decoding
+4. PPO + Asymmetric Privileged Learning
+5. Discrete SAC + Asymmetric Privileged Learning
+```
+
+The main comparison dimensions are:
+
+```text
+point_edge_accuracy
+projection error
+within-distance success rates
+legal_transition_rate
+path_edit_distance
+trajectory_success_rate
+mean confidence
+error taxonomy
+```
+
+The GNN-HMM should remain the primary model unless an RL branch improves both:
+
+```text
+1. local candidate/edge selection
+2. route-level sequence consistency
+```
+
+---
+
+## 23. Recommended development order
 
 ```text
 1. Prepare and inspect trajectory data.
@@ -1152,14 +1469,16 @@ python scripts\11_visualize_osm_overlay.py
 12. Visualize failure cases.
 13. Tune transition weight and illegal-transition penalty.
 14. Improve transition features and sequence-level constraints.
-15. Compare against classical and learned baselines.
+15. Run PPO as an experimental RL baseline.
+16. Run D-SAC as an advanced experimental RL baseline.
+17. Compare all methods under the same evaluation script.
 ```
 
 ---
 
-## 20. Future extensions
+## 24. Future extensions
 
-The current focus is the **GNN-HMM map-matching pipeline**. Possible future extensions include:
+Possible future extensions include:
 
 ```text
 Graph Attention Network road encoder
@@ -1172,42 +1491,23 @@ Synthetic route generation from OSM
 Pseudo-labelling large raw GPS datasets
 Online streaming map matching
 Routing-service integration
+Hybrid GNN-HMM + RL reranking
 ```
 
-### Future RL extension: PPO with Asymmetric Privileged Learning
-
-A future branch can treat map matching as a sequential decision problem:
+A strong future hybrid design would use GNN-HMM scores as actor features for PPO or D-SAC:
 
 ```text
-episode = one trajectory
-step    = one GPS observation
-action  = choose one candidate road segment
+GNN-HMM emission score
+GNN-HMM transition score
+Viterbi baseline candidate
+candidate confidence
 ```
 
-A PPO actor would use only deployment-safe features:
-
-```text
-GPS/yaw features
-candidate features
-candidate mask
-previous selected candidate
-```
-
-A privileged critic could use training-only information:
-
-```text
-GT candidate position
-GT route geometry
-future local candidate context
-same-way/reverse-edge hints
-transition legality labels
-```
-
-This asymmetric setup can be used as a future sequence-level learning baseline, but it is separate from the current GNN-HMM implementation.
+The RL policy would then operate as a route-level reranker rather than learning map matching entirely from scratch.
 
 ---
 
-## 21. Final summary
+## 25. Final summary
 
 One-Direction is a graph-based neural map-matching system for mapping vehicle pose observations to OSM road segments.
 
@@ -1221,6 +1521,7 @@ Learned emission scoring
 Learned transition scoring
 Custom HMM/Viterbi decoder
 Geometry-aware and topology-aware evaluation
+Experimental PPO and D-SAC reinforcement-learning branches
 ```
 
 The final output is:
@@ -1238,3 +1539,5 @@ The central design principle is:
 Use neural learning to improve road-segment and transition scoring,
 while preserving graph topology and sequence consistency through HMM decoding.
 ```
+
+The current recommended research direction is to keep **GNN-HMM + Viterbi** as the primary system, then use PPO and D-SAC as controlled experimental baselines or future hybrid reranking modules.

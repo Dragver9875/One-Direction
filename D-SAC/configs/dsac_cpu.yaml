@@ -1,0 +1,69 @@
+project:
+  seed: 42
+  device: cpu
+
+paths:
+  train_dataset: data/processed/tensors/train_dataset.pt
+  val_dataset: data/processed/tensors/val_dataset.pt
+  test_dataset: data/processed/tensors/test_dataset.pt
+
+  output_dir: D-SAC/outputs
+  checkpoint_dir: D-SAC/outputs/checkpoints
+  report_dir: D-SAC/outputs/reports
+  metric_dir: D-SAC/outputs/metrics
+  match_dir: D-SAC/outputs/matches
+
+features:
+  use_privileged_critic: true
+  max_candidates: null
+
+reward:
+  correct_action_reward: 1.0
+  wrong_action_penalty: -0.2
+  invalid_action_penalty: -2.0
+  legal_transition_bonus: 0.2
+  illegal_transition_penalty: -1.0
+  projection_error_weight: 0.02
+  projection_error_cap_m: 25.0
+  terminal_success_accuracy: 0.90
+  terminal_success_bonus: 2.0
+  terminal_accuracy_weight: 1.0
+  terminal_illegal_transition_weight: 0.2
+
+model:
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.1
+
+bc:
+  enabled: true
+  epochs: 10
+  batch_size: 512
+  lr: 0.001
+  checkpoint: D-SAC/outputs/checkpoints/bc_actor.pt
+
+dsac:
+  epochs: 60
+  rollouts_per_epoch: 200
+  updates_per_epoch: 800
+  batch_size: 512
+  replay_size: 200000
+  warmup_rollouts: 200
+
+  gamma: 0.98
+  tau: 0.005
+
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  alpha_lr: 0.0003
+
+  init_alpha: 0.2
+  auto_alpha: true
+  target_entropy_scale: 0.7
+
+  grad_clip_norm: 5.0
+  load_bc_checkpoint: true
+
+evaluation:
+  split: test
+  greedy: true

@@ -1,0 +1,5 @@
+[project]
+name = "one-direction-dsac"
+version = "0.1.0"
+description = "Discrete SAC with asymmetric privileged learning for One-Direction"
+requires-python = ">=3.10"

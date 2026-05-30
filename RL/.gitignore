@@ -1,0 +1,133 @@
+# =========================
+# One-Direction RL outputs
+# =========================
+
+outputs/
+!outputs/.gitkeep
+
+outputs/checkpoints/
+outputs/matches/
+outputs/metrics/
+outputs/reports/
+outputs/figures/
+outputs/logs/
+outputs/tensorboard/
+outputs/wandb/
+
+
+# =========================
+# Model checkpoints
+# =========================
+
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+
+# =========================
+# Generated RL artifacts
+# =========================
+
+*.parquet
+*.csv
+*.jsonl
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+replay_buffer*
+rollout_buffer*
+ppo_asym_matches*
+ppo_asym_metrics*
+ppo_training_report*
+bc_actor*
+ppo_asym_best*
+ppo_asym_last*
+
+
+# =========================
+# Python cache
+# =========================
+
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+
+# =========================
+# Virtual environments
+# =========================
+
+.venv/
+venv/
+env/
+ENV/
+
+
+# =========================
+# Jupyter
+# =========================
+
+.ipynb_checkpoints/
+
+
+# =========================
+# IDE / editor
+# =========================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+# =========================
+# OS files
+# =========================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# =========================
+# Logs
+# =========================
+
+*.log
+logs/
+
+
+# =========================
+# Experiment trackers
+# =========================
+
+wandb/
+runs/
+lightning_logs/
+tensorboard/
+
+
+# =========================
+# Keep source/config files
+# =========================
+
+!README.md
+!requirements-rl.txt
+!pyproject.toml
+!configs/
+!configs/*.yaml
+!scripts/
+!scripts/*.py
+!src/
+!src/**/*.py
+!tests/
+!tests/*.py

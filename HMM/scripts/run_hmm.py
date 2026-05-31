@@ -73,6 +73,13 @@ class HMMParams:
     time_infeasible_penalty: float = 0.50
     rank_delta_weight: float = 0.05
     distance_delta_weight: float = 0.05
+    dynamic_transition_enabled: bool = False
+    dynamic_transition_min_gate: float = 0.50
+    dynamic_transition_max_gate: float = 1.50
+    dynamic_transition_entropy_weight: float = 0.60
+    dynamic_transition_margin_weight: float = 0.40
+    dynamic_transition_margin_temperature: float = 1.0
+
     offroad_enabled: bool = False
     offroad_emission_bias: float = -5.0
     offroad_enter_penalty: float = 3.0

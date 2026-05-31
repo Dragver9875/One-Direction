@@ -53,15 +53,15 @@ transition:
   rank_delta_weight: 0.05
   distance_delta_weight: 0.05
 dynamic_transition:
-  enabled: false
-  min_gate: 0.50
-  max_gate: 1.50
-  entropy_weight: 0.60
-  margin_weight: 0.40
-  margin_temperature: 1.0
+  enabled: true
+  min_gate: 0.35
+  max_gate: 1.65
+  entropy_weight: 0.65
+  margin_weight: 0.35
+  margin_temperature: 0.75
 
 offroad:
-  enabled: true
+  enabled: false
   emission_bias: -5.0
   enter_penalty: 3.0
   exit_penalty: 2.0

@@ -18,7 +18,7 @@ decode:
   confidence_mode: posterior
 emission:
   emission_scale: 1.0
-  distance_weight: 2.0
+  distance_weight: 4.0
   log_distance_weight: 0.0
   yaw_weight: 1.5
   rank_weight: 0.7
@@ -35,23 +35,30 @@ emission:
   sigma_ambiguity_weight: 0.4
   sigma_yaw_unreliable_weight: 0.3
 transition:
-  transition_scale: 0.0
-  legal_bonus: 0.5
-  illegal_penalty: 1.0
-  same_edge_bonus: 0.2
+  transition_scale: 0.15
+  legal_bonus: 0.2
+  illegal_penalty: 0.0
+  same_edge_bonus: 0.35
   same_osm_way_bonus: 0.1
   same_road_class_bonus: 0.05
   route_distance_weight: 0.25
   route_gps_ratio_weight: 0.1
-  route_minus_gps_weight: 0.2
+  route_minus_gps_weight: 0.1
   turn_weight: 0.1
   yaw_change_weight: 0.05
-  uturn_penalty: 0.5
+  uturn_penalty: 0.0
   sharp_turn_speed_weight: 0.25
   time_feasible_bonus: 0.1
   time_infeasible_penalty: 0.5
   rank_delta_weight: 0.05
   distance_delta_weight: 0.05
+dynamic_transition:
+  enabled: true
+  min_gate: 0.35
+  max_gate: 1.65
+  entropy_weight: 0.65
+  margin_weight: 0.35
+  margin_temperature: 0.75
 offroad:
   enabled: false
   emission_bias: -5.0

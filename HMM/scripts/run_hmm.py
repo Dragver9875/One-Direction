@@ -1,48 +1,41 @@
+
 #!/usr/bin/env python3
 from __future__ import annotations
-
-import argparse
-import itertools
-import json
-import random
-from dataclasses import asdict, dataclass
+import argparse, itertools, json, random
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
-
 import numpy as np
 import pandas as pd
 import torch
 import yaml
 from torch import Tensor
 
-
 MASK_VALUE = -1.0e9
-
+OFFROAD_EDGE_IDX = -999999
 
 @dataclass
-class EpisodeSample:
+class Episode:
     trajectory_id: int
     candidate_edge_idx: Tensor
     candidate_mask: Tensor
-    candidate_proj_xy: Tensor | None
     emission_features: Tensor
     transition_features: Tensor
     transition_mask: Tensor
     gt_candidate_pos: Tensor
-    gt_edge_idx: Tensor | None
-    gt_proj_xy: Tensor | None
-    emission_feature_names: list[str]
-    transition_feature_names: list[str]
-    timestamps: list[Any] | None = None
+    candidate_proj_xy: Tensor | None = None
+    gt_edge_idx: Tensor | None = None
+    gt_proj_xy: Tensor | None = None
+    emission_feature_names: list[str] | None = None
+    transition_feature_names: list[str] | None = None
 
     @property
-    def length(self) -> int:
+    def T(self) -> int:
         return int(self.candidate_edge_idx.shape[0])
 
     @property
-    def num_candidates(self) -> int:
+    def K(self) -> int:
         return int(self.candidate_edge_idx.shape[1])
-
 
 @dataclass
 class HMMParams:
@@ -53,9 +46,16 @@ class HMMParams:
     rank_weight: float = 1.2
     speed_consistency_weight: float = 0.15
     oneway_weight: float = 0.05
+    road_class_prior_weight: float = 0.15
+    candidate_density_weight: float = 0.10
     yaw_reliability_weight: float = 0.35
-    bias: float = 0.0
-
+    adaptive_sigma_enabled: bool = True
+    sigma_base: float = 0.35
+    sigma_min: float = 0.20
+    sigma_max: float = 2.50
+    sigma_speed_weight: float = 0.30
+    sigma_ambiguity_weight: float = 0.40
+    sigma_yaw_unreliable_weight: float = 0.30
     transition_scale: float = 0.35
     legal_bonus: float = 0.35
     illegal_penalty: float = 2.0
@@ -67,630 +67,476 @@ class HMMParams:
     route_minus_gps_weight: float = 0.15
     turn_weight: float = 0.10
     yaw_change_weight: float = 0.05
+    uturn_penalty: float = 0.50
+    sharp_turn_speed_weight: float = 0.25
     time_feasible_bonus: float = 0.10
     time_infeasible_penalty: float = 0.50
     rank_delta_weight: float = 0.05
     distance_delta_weight: float = 0.05
+    offroad_enabled: bool = False
+    offroad_emission_bias: float = -5.0
+    offroad_enter_penalty: float = 3.0
+    offroad_exit_penalty: float = 2.0
+    offroad_stay_bonus: float = 0.5
 
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def load_config(path: Path) -> dict[str, Any]:
+def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+def save_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8", newline="\n")
 
-def deep_get(config: dict[str, Any], key: str, default: Any = None) -> Any:
-    current: Any = config
-    for part in key.split("."):
-        if not isinstance(current, dict) or part not in current:
+def deep_get(d: dict[str, Any], key: str, default=None):
+    cur = d
+    for p in key.split("."):
+        if not isinstance(cur, dict) or p not in cur:
             return default
-        current = current[part]
-    return current
+        cur = cur[p]
+    return cur
 
+def parse_value(v: str):
+    v = v.strip()
+    if v.lower() in {"true", "false"}: return v.lower() == "true"
+    if v.lower() in {"none", "null"}: return None
+    try: return int(v)
+    except ValueError: pass
+    try: return float(v)
+    except ValueError: return v
 
-def parse_value(value: str) -> Any:
-    value = value.strip()
-    if value.lower() in {"true", "false"}:
-        return value.lower() == "true"
-    if value.lower() in {"none", "null"}:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        return value
-
-
-def deep_set(config: dict[str, Any], key: str, value: Any) -> None:
-    current = config
+def deep_set(d: dict[str, Any], key: str, value):
+    cur = d
     parts = key.split(".")
-    for part in parts[:-1]:
-        if part not in current or not isinstance(current[part], dict):
-            current[part] = {}
-        current = current[part]
-    current[parts[-1]] = value
+    for p in parts[:-1]:
+        cur = cur.setdefault(p, {})
+    cur[parts[-1]] = value
 
+def apply_overrides(cfg: dict[str, Any], overrides: list[str]):
+    for o in overrides:
+        if "=" not in o: raise ValueError(f"Override must be key=value: {o}")
+        k, v = o.split("=", 1)
+        deep_set(cfg, k, parse_value(v))
+    return cfg
 
-def apply_overrides(config: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
-    for item in overrides:
-        if "=" not in item:
-            raise ValueError(f"Override must use key=value format: {item}")
-        key, value = item.split("=", 1)
-        deep_set(config, key, parse_value(value))
-    return config
+def tensor(x, dtype=None):
+    if x is None: return None
+    y = x if isinstance(x, Tensor) else torch.as_tensor(x)
+    return y.to(dtype=dtype) if dtype is not None else y
 
+def extract_payload(obj):
+    if isinstance(obj, (list, tuple)): return list(obj)
+    if isinstance(obj, dict):
+        for k in ["episodes", "trajectories", "samples", "items", "data"]:
+            if isinstance(obj.get(k), (list, tuple)): return list(obj[k])
+        if "candidate_edge_idx" in obj: return [obj]
+    raise ValueError(f"Unsupported dataset payload: {type(obj)}")
 
-def as_tensor(value: Any, dtype: torch.dtype | None = None) -> Tensor | None:
-    if value is None:
-        return None
-    if isinstance(value, Tensor):
-        out = value
-    else:
-        out = torch.as_tensor(value)
-    if dtype is not None:
-        out = out.to(dtype=dtype)
-    return out
-
-
-def extract_raw(payload: Any) -> list[Any]:
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, tuple):
-        return list(payload)
-    if isinstance(payload, dict):
-        for key in ["episodes", "trajectories", "samples", "items", "data"]:
-            if key in payload and isinstance(payload[key], (list, tuple)):
-                return list(payload[key])
-        if "candidate_edge_idx" in payload:
-            return [payload]
-    raise ValueError(f"Unsupported tensor dataset payload type: {type(payload)}")
-
-
-def make_episode(raw: Any, fallback_id: int) -> EpisodeSample:
+def make_episode(raw: Any, i: int) -> Episode:
     if not isinstance(raw, dict):
-        if hasattr(raw, "__dict__"):
-            raw = vars(raw)
-        else:
-            raise ValueError(f"Unsupported episode type: {type(raw)}")
-
-    candidate_edge_idx = as_tensor(raw["candidate_edge_idx"], torch.long)
-    candidate_mask = as_tensor(raw.get("candidate_mask", candidate_edge_idx >= 0), torch.bool)
-    emission_features = as_tensor(raw["emission_features"], torch.float32)
-    transition_features = as_tensor(raw.get("transition_features"), torch.float32)
-    transition_mask = as_tensor(raw.get("transition_mask"), torch.bool)
-
-    if transition_features is None:
-        t_len, k = candidate_edge_idx.shape
-        transition_features = torch.zeros(max(t_len - 1, 0), k, k, 0, dtype=torch.float32)
-
-    if transition_mask is None:
-        t_len, k = candidate_edge_idx.shape
-        transition_mask = torch.ones(max(t_len - 1, 0), k, k, dtype=torch.bool)
-
+        raw = vars(raw)
+    edge = tensor(raw["candidate_edge_idx"], torch.long)
+    mask = tensor(raw.get("candidate_mask", edge >= 0), torch.bool)
+    ef = tensor(raw["emission_features"], torch.float32)
+    tf = tensor(raw.get("transition_features"), torch.float32)
+    tm = tensor(raw.get("transition_mask"), torch.bool)
+    if tf is None:
+        tf = torch.zeros(max(edge.shape[0] - 1, 0), edge.shape[1], edge.shape[1], 0)
+    if tm is None:
+        tm = torch.ones(max(edge.shape[0] - 1, 0), edge.shape[1], edge.shape[1], dtype=torch.bool)
     gt_key = "gt_candidate_pos" if "gt_candidate_pos" in raw else "gt_pos"
-
-    return EpisodeSample(
-        trajectory_id=int(raw.get("trajectory_id", raw.get("id", fallback_id))),
-        candidate_edge_idx=candidate_edge_idx,
-        candidate_mask=candidate_mask,
-        candidate_proj_xy=as_tensor(raw.get("candidate_proj_xy"), torch.float32),
-        emission_features=emission_features,
-        transition_features=transition_features,
-        transition_mask=transition_mask,
-        gt_candidate_pos=as_tensor(raw[gt_key], torch.long).reshape(-1),
-        gt_edge_idx=as_tensor(raw.get("gt_edge_idx"), torch.long),
-        gt_proj_xy=as_tensor(raw.get("gt_proj_xy"), torch.float32),
+    return Episode(
+        trajectory_id=int(raw.get("trajectory_id", raw.get("id", i))),
+        candidate_edge_idx=edge,
+        candidate_mask=mask,
+        emission_features=ef,
+        transition_features=tf,
+        transition_mask=tm,
+        gt_candidate_pos=tensor(raw[gt_key], torch.long).reshape(-1),
+        candidate_proj_xy=tensor(raw.get("candidate_proj_xy"), torch.float32),
+        gt_edge_idx=tensor(raw.get("gt_edge_idx"), torch.long),
+        gt_proj_xy=tensor(raw.get("gt_proj_xy"), torch.float32),
         emission_feature_names=list(raw.get("emission_feature_names", [])),
         transition_feature_names=list(raw.get("transition_feature_names", [])),
-        timestamps=raw.get("timestamps", None),
     )
 
-
-def load_dataset(path: Path) -> list[EpisodeSample]:
-    if not path.exists():
-        raise FileNotFoundError(path)
+def load_dataset(path: Path) -> list[Episode]:
+    if not path.exists(): raise FileNotFoundError(path)
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    return [make_episode(item, idx) for idx, item in enumerate(extract_raw(payload))]
+    return [make_episode(x, i) for i, x in enumerate(extract_payload(payload))]
 
-
-def dataset_summary(dataset: list[EpisodeSample]) -> dict[str, Any]:
-    points = sum(ep.length for ep in dataset)
-    labelled = sum(int((ep.gt_candidate_pos >= 0).sum().item()) for ep in dataset)
+def dataset_summary(ds: list[Episode]) -> dict:
     return {
-        "episodes": len(dataset),
-        "points": points,
-        "labelled_points": labelled,
-        "min_length": min(ep.length for ep in dataset),
-        "max_length": max(ep.length for ep in dataset),
-        "max_candidates": max(ep.num_candidates for ep in dataset),
-        "emission_feature_dim": int(dataset[0].emission_features.shape[-1]),
-        "transition_feature_dim": int(dataset[0].transition_features.shape[-1]),
+        "episodes": len(ds),
+        "points": sum(e.T for e in ds),
+        "labelled_points": sum(int((e.gt_candidate_pos >= 0).sum()) for e in ds),
+        "min_length": min(e.T for e in ds),
+        "max_length": max(e.T for e in ds),
+        "max_candidates": max(e.K for e in ds),
+        "emission_feature_dim": int(ds[0].emission_features.shape[-1]),
+        "transition_feature_dim": int(ds[0].transition_features.shape[-1]),
     }
 
+def fidx(names, name, fallback=None):
+    return names.index(name) if name in names else fallback
 
-def feature_index(names: list[str], name: str, fallback: int | None = None) -> int | None:
-    if name in names:
-        return names.index(name)
-    return fallback
+def feat(x: Tensor, names: list[str] | None, name: str, fallback=None):
+    names = names or []
+    idx = fidx(names, name, fallback)
+    if idx is None or idx >= x.shape[-1]:
+        return torch.zeros(x.shape[:-1], dtype=x.dtype)
+    return x[..., idx]
 
-
-def get_feature(features: Tensor, names: list[str], name: str, fallback: int | None = None) -> Tensor:
-    idx = feature_index(names, name, fallback)
-    if idx is None or idx >= features.shape[-1]:
-        return torch.zeros(features.shape[:-1], dtype=features.dtype)
-    return features[..., idx]
-
-
-def params_from_config(config: dict[str, Any]) -> HMMParams:
-    emission = config.get("emission", {})
-    transition = config.get("transition", {})
+def params_from_config(cfg: dict[str, Any]) -> HMMParams:
+    em, tr, off = cfg.get("emission", {}), cfg.get("transition", {}), cfg.get("offroad", {})
     return HMMParams(
-        emission_scale=float(emission.get("emission_scale", 1.0)),
-        distance_weight=float(emission.get("distance_weight", 3.0)),
-        log_distance_weight=float(emission.get("log_distance_weight", 0.8)),
-        yaw_weight=float(emission.get("yaw_weight", 1.2)),
-        rank_weight=float(emission.get("rank_weight", 1.2)),
-        speed_consistency_weight=float(emission.get("speed_consistency_weight", 0.15)),
-        oneway_weight=float(emission.get("oneway_weight", 0.05)),
-        yaw_reliability_weight=float(emission.get("yaw_reliability_weight", 0.35)),
-        bias=float(emission.get("bias", 0.0)),
-        transition_scale=float(transition.get("transition_scale", 0.35)),
-        legal_bonus=float(transition.get("legal_bonus", 0.35)),
-        illegal_penalty=float(transition.get("illegal_penalty", 2.0)),
-        same_edge_bonus=float(transition.get("same_edge_bonus", 0.35)),
-        same_osm_way_bonus=float(transition.get("same_osm_way_bonus", 0.15)),
-        same_road_class_bonus=float(transition.get("same_road_class_bonus", 0.05)),
-        route_distance_weight=float(transition.get("route_distance_weight", 0.25)),
-        route_gps_ratio_weight=float(transition.get("route_gps_ratio_weight", 0.10)),
-        route_minus_gps_weight=float(transition.get("route_minus_gps_weight", 0.15)),
-        turn_weight=float(transition.get("turn_weight", 0.10)),
-        yaw_change_weight=float(transition.get("yaw_change_weight", 0.05)),
-        time_feasible_bonus=float(transition.get("time_feasible_bonus", 0.10)),
-        time_infeasible_penalty=float(transition.get("time_infeasible_penalty", 0.50)),
-        rank_delta_weight=float(transition.get("rank_delta_weight", 0.05)),
-        distance_delta_weight=float(transition.get("distance_delta_weight", 0.05)),
+        emission_scale=float(em.get("emission_scale", 1.0)),
+        distance_weight=float(em.get("distance_weight", 3.0)),
+        log_distance_weight=float(em.get("log_distance_weight", 0.8)),
+        yaw_weight=float(em.get("yaw_weight", 1.2)),
+        rank_weight=float(em.get("rank_weight", 1.2)),
+        speed_consistency_weight=float(em.get("speed_consistency_weight", 0.15)),
+        oneway_weight=float(em.get("oneway_weight", 0.05)),
+        road_class_prior_weight=float(em.get("road_class_prior_weight", 0.15)),
+        candidate_density_weight=float(em.get("candidate_density_weight", 0.10)),
+        yaw_reliability_weight=float(em.get("yaw_reliability_weight", 0.35)),
+        adaptive_sigma_enabled=bool(em.get("adaptive_sigma_enabled", True)),
+        sigma_base=float(em.get("sigma_base", 0.35)),
+        sigma_min=float(em.get("sigma_min", 0.20)),
+        sigma_max=float(em.get("sigma_max", 2.50)),
+        sigma_speed_weight=float(em.get("sigma_speed_weight", 0.30)),
+        sigma_ambiguity_weight=float(em.get("sigma_ambiguity_weight", 0.40)),
+        sigma_yaw_unreliable_weight=float(em.get("sigma_yaw_unreliable_weight", 0.30)),
+        transition_scale=float(tr.get("transition_scale", 0.35)),
+        legal_bonus=float(tr.get("legal_bonus", 0.35)),
+        illegal_penalty=float(tr.get("illegal_penalty", 2.0)),
+        same_edge_bonus=float(tr.get("same_edge_bonus", 0.35)),
+        same_osm_way_bonus=float(tr.get("same_osm_way_bonus", 0.15)),
+        same_road_class_bonus=float(tr.get("same_road_class_bonus", 0.05)),
+        route_distance_weight=float(tr.get("route_distance_weight", 0.25)),
+        route_gps_ratio_weight=float(tr.get("route_gps_ratio_weight", 0.10)),
+        route_minus_gps_weight=float(tr.get("route_minus_gps_weight", 0.15)),
+        turn_weight=float(tr.get("turn_weight", 0.10)),
+        yaw_change_weight=float(tr.get("yaw_change_weight", 0.05)),
+        uturn_penalty=float(tr.get("uturn_penalty", 0.50)),
+        sharp_turn_speed_weight=float(tr.get("sharp_turn_speed_weight", 0.25)),
+        time_feasible_bonus=float(tr.get("time_feasible_bonus", 0.10)),
+        time_infeasible_penalty=float(tr.get("time_infeasible_penalty", 0.50)),
+        rank_delta_weight=float(tr.get("rank_delta_weight", 0.05)),
+        distance_delta_weight=float(tr.get("distance_delta_weight", 0.05)),
+        offroad_enabled=bool(off.get("enabled", False)),
+        offroad_emission_bias=float(off.get("emission_bias", -5.0)),
+        offroad_enter_penalty=float(off.get("enter_penalty", 3.0)),
+        offroad_exit_penalty=float(off.get("exit_penalty", 2.0)),
+        offroad_stay_bonus=float(off.get("stay_bonus", 0.5)),
     )
 
+def obs_sigma(ep: Episode, p: HMMParams):
+    f, names = ep.emission_features.float(), ep.emission_feature_names
+    speed = feat(f, names, "speed_norm", None)
+    if speed.shape != f.shape[:-1]: speed = torch.zeros(f.shape[:-1])
+    speed_pt = speed.mean(dim=1)
+    yaw_rel = feat(f, names, "yaw_reliability", 15).clamp(0, 1)
+    yaw_pt = yaw_rel.mean(dim=1) if yaw_rel.shape == f.shape[:-1] else torch.zeros(ep.T)
+    density = ep.candidate_mask.float().sum(dim=1) / max(ep.K, 1)
+    sigma = p.sigma_base + p.sigma_speed_weight*(1-speed_pt.clamp(0,1)) + p.sigma_ambiguity_weight*density + p.sigma_yaw_unreliable_weight*(1-yaw_pt)
+    return sigma.clamp(p.sigma_min, p.sigma_max)
 
-def compute_emission_scores(sample: EpisodeSample, params: HMMParams) -> Tensor:
-    f = sample.emission_features.float()
-    names = sample.emission_feature_names
-
-    distance = get_feature(f, names, "distance_norm", 0).clamp_min(0.0)
-    log_distance = get_feature(f, names, "log_distance_norm", 1).clamp_min(0.0)
-    abs_yaw = get_feature(f, names, "abs_yaw_diff_norm", 3).clamp_min(0.0)
-    rank = get_feature(f, names, "candidate_rank_norm", 10).clamp_min(0.0)
-    speed_consistency = get_feature(f, names, "speed_consistency", 11).clamp_min(0.0)
-    oneway = get_feature(f, names, "oneway", 12).clamp_min(0.0)
-    yaw_reliability = get_feature(f, names, "yaw_reliability", 15).clamp(0.0, 1.0)
-
-    yaw_factor = params.yaw_reliability_weight + (1.0 - params.yaw_reliability_weight) * yaw_reliability
-    yaw_penalty = abs_yaw * yaw_factor
-
-    score = (
-        params.bias
-        - params.distance_weight * distance
-        - params.log_distance_weight * log_distance
-        - params.yaw_weight * yaw_penalty
-        - params.rank_weight * rank
-        - params.speed_consistency_weight * speed_consistency
-        + params.oneway_weight * oneway
-    )
-
-    score = params.emission_scale * score
-    return score.masked_fill(~sample.candidate_mask.bool(), MASK_VALUE)
-
-
-def compute_transition_scores(sample: EpisodeSample, params: HMMParams, mode: str) -> Tensor:
-    tfeat = sample.transition_features.float()
-    if tfeat.numel() == 0:
-        return torch.empty(0)
-
-    names = sample.transition_feature_names
-
-    route_dist = get_feature(tfeat, names, "route_dist_norm", 3).clamp_min(0.0)
-    route_minus_gps = get_feature(tfeat, names, "route_minus_gps_norm", 4).clamp_min(0.0)
-    route_ratio = get_feature(tfeat, names, "route_gps_ratio_norm", 5).clamp_min(0.0)
-    turn = get_feature(tfeat, names, "turn_norm", 6).clamp_min(0.0)
-    yaw_change = get_feature(tfeat, names, "yaw_change_norm", 7).clamp_min(0.0)
-
-    connected = get_feature(tfeat, names, "connected", 9)
-    legal = get_feature(tfeat, names, "legal", 10)
-    same_edge = get_feature(tfeat, names, "same_edge", 11)
-    same_osm_way = get_feature(tfeat, names, "same_osm_way", 12)
-    same_road_class = get_feature(tfeat, names, "same_road_class", 13)
-    rank_delta = get_feature(tfeat, names, "candidate_rank_delta_norm", 15).clamp_min(0.0)
-    distance_delta = get_feature(tfeat, names, "distance_delta_norm", 18).clamp_min(0.0)
-    time_feasible = get_feature(tfeat, names, "time_feasible", 19).clamp(0.0, 1.0)
-
-    legal_like = ((legal > 0.5) | (same_edge > 0.5) | (connected > 0.5)).float()
-    infeasible = 1.0 - time_feasible
-
-    score = (
-        params.legal_bonus * legal_like
-        + params.same_edge_bonus * same_edge
-        + params.same_osm_way_bonus * same_osm_way
-        + params.same_road_class_bonus * same_road_class
-        + params.time_feasible_bonus * time_feasible
-        - params.illegal_penalty * (1.0 - legal_like)
-        - params.time_infeasible_penalty * infeasible
-        - params.route_distance_weight * route_dist
-        - params.route_minus_gps_weight * route_minus_gps
-        - params.route_gps_ratio_weight * route_ratio
-        - params.turn_weight * turn
-        - params.yaw_change_weight * yaw_change
-        - params.rank_delta_weight * rank_delta
-        - params.distance_delta_weight * distance_delta
-    )
-
-    score = params.transition_scale * score
-    mask = sample.transition_mask.bool()
-
-    if mode == "hard":
-        score = score.masked_fill(~mask, MASK_VALUE)
-    elif mode == "soft":
-        score = score - (~mask).float() * (params.transition_scale * params.illegal_penalty)
-    elif mode == "none":
-        pass
+def emission_scores(ep: Episode, p: HMMParams):
+    x, names = ep.emission_features.float(), ep.emission_feature_names
+    dist = feat(x, names, "distance_norm", 0).clamp_min(0)
+    logdist = feat(x, names, "log_distance_norm", 1).clamp_min(0)
+    yaw = feat(x, names, "abs_yaw_diff_norm", 3).clamp_min(0)
+    rank = feat(x, names, "candidate_rank_norm", 10).clamp_min(0)
+    speed_cons = feat(x, names, "speed_consistency", 11).clamp_min(0)
+    oneway = feat(x, names, "oneway", 12).clamp_min(0)
+    yaw_rel = feat(x, names, "yaw_reliability", 15).clamp(0, 1)
+    speed = feat(x, names, "speed_norm", None)
+    if speed.shape != dist.shape: speed = torch.zeros_like(dist)
+    road_prior = feat(x, names, "road_class_prior", None)
+    if road_prior.shape != dist.shape: road_prior = torch.zeros_like(dist)
+    density = ep.candidate_mask.float().sum(dim=1, keepdim=True) / max(ep.K, 1)
+    if p.adaptive_sigma_enabled:
+        sigma = obs_sigma(ep, p).view(-1, 1)
+        dist_score = -0.5*(dist/sigma).pow(2) - torch.log(sigma.clamp_min(1e-6))
     else:
-        raise ValueError(f"Unsupported transition mode: {mode}")
-
+        dist_score = -dist
+    yaw_factor = (p.yaw_reliability_weight + (1-p.yaw_reliability_weight)*yaw_rel) * (0.25 + 0.75*speed.clamp(0,1))
+    score = (
+        p.distance_weight*dist_score
+        - p.log_distance_weight*logdist
+        - p.yaw_weight*yaw*yaw_factor
+        - p.rank_weight*rank
+        - p.speed_consistency_weight*speed_cons
+        + p.oneway_weight*oneway
+        + p.road_class_prior_weight*road_prior
+        - p.candidate_density_weight*density
+    ) * p.emission_scale
+    score = score.masked_fill(~ep.candidate_mask.bool(), MASK_VALUE)
+    if p.offroad_enabled:
+        score = torch.cat([score, torch.full((ep.T,1), p.offroad_emission_bias)], dim=1)
     return score
 
+def transition_scores(ep: Episode, p: HMMParams, mode: str):
+    T, K = ep.T, ep.K
+    if T <= 1:
+        base = torch.empty(0, K, K)
+    else:
+        tf, names = ep.transition_features.float(), ep.transition_feature_names
+        if tf.numel() == 0:
+            base = torch.zeros(T-1, K, K)
+        else:
+            route = feat(tf, names, "route_dist_norm", 3).clamp_min(0)
+            minus = feat(tf, names, "route_minus_gps_norm", 4).clamp_min(0)
+            ratio = feat(tf, names, "route_gps_ratio_norm", 5).clamp_min(0)
+            turn = feat(tf, names, "turn_norm", 6).clamp_min(0)
+            yawc = feat(tf, names, "yaw_change_norm", 7).clamp_min(0)
+            connected = feat(tf, names, "connected", 9)
+            legal = feat(tf, names, "legal", 10)
+            same_edge = feat(tf, names, "same_edge", 11)
+            same_way = feat(tf, names, "same_osm_way", 12)
+            same_class = feat(tf, names, "same_road_class", 13)
+            rank_delta = feat(tf, names, "candidate_rank_delta_norm", 15).clamp_min(0)
+            dist_delta = feat(tf, names, "distance_delta_norm", 18).clamp_min(0)
+            time_ok = feat(tf, names, "time_feasible", 19).clamp(0, 1)
+            uturn = feat(tf, names, "uturn", None)
+            if uturn.shape != turn.shape: uturn = (turn > 0.85).float()
+            legal_like = ((legal > 0.5) | (same_edge > 0.5) | (connected > 0.5)).float()
+            infeasible = 1 - time_ok
+            sharp = (turn > 0.65).float()
+            base = (
+                p.legal_bonus*legal_like + p.same_edge_bonus*same_edge + p.same_osm_way_bonus*same_way
+                + p.same_road_class_bonus*same_class + p.time_feasible_bonus*time_ok
+                - p.illegal_penalty*(1-legal_like) - p.time_infeasible_penalty*infeasible
+                - p.route_distance_weight*route - p.route_minus_gps_weight*minus - p.route_gps_ratio_weight*ratio
+                - p.turn_weight*turn - p.yaw_change_weight*yawc - p.uturn_penalty*uturn
+                - p.sharp_turn_speed_weight*sharp*(1-infeasible)
+                - p.rank_delta_weight*rank_delta - p.distance_delta_weight*dist_delta
+            ) * p.transition_scale
+            if mode == "hard": base = base.masked_fill(~ep.transition_mask.bool(), MASK_VALUE)
+            elif mode == "soft": base = base - (~ep.transition_mask.bool()).float()*(p.transition_scale*p.illegal_penalty)
+            elif mode == "none": pass
+            else: raise ValueError(f"Unsupported transition_mode: {mode}")
+    if p.offroad_enabled:
+        if base.numel() == 0: return torch.empty(0, K+1, K+1)
+        out = torch.full((base.shape[0], K+1, K+1), -p.offroad_enter_penalty)
+        out[:, :K, :K] = base
+        out[:, :K, K] = -p.offroad_enter_penalty
+        out[:, K, :K] = -p.offroad_exit_penalty
+        out[:, K, K] = p.offroad_stay_bonus
+        return out
+    return base
 
-def viterbi_decode(emissions: Tensor, transitions: Tensor) -> tuple[list[int], Tensor]:
-    if emissions.ndim != 2:
-        raise ValueError("emissions must have shape [T, K].")
-
-    t_len, _ = emissions.shape
-    if t_len == 0:
-        return [], torch.empty(0)
-
-    dp = emissions[0].clone()
-    history = [dp.clone()]
-    backpointers: list[Tensor] = []
-
-    for t in range(1, t_len):
-        scores = dp[:, None] + transitions[t - 1] if transitions.numel() else dp[:, None]
-        best_scores, best_prev = scores.max(dim=0)
-        dp = emissions[t] + best_scores
-        backpointers.append(best_prev)
-        history.append(dp.clone())
-
-    last = int(dp.argmax().item())
-    path = [last]
-
-    for bp in reversed(backpointers):
-        last = int(bp[last].item())
-        path.append(last)
-
+def viterbi(E: Tensor, A: Tensor, beam_size=None):
+    T, K = E.shape
+    if T == 0: return [], torch.empty(0)
+    dp = E[0].clone(); hist=[dp.clone()]; back=[]
+    if beam_size and 0 < beam_size < K:
+        keep = torch.topk(dp, beam_size).indices
+        m = torch.ones_like(dp, dtype=torch.bool); m[keep] = False
+        dp = dp.masked_fill(m, MASK_VALUE)
+    for t in range(1, T):
+        s = dp[:, None] + A[t-1] if A.numel() else dp[:, None]
+        best, prev = s.max(dim=0)
+        dp = E[t] + best
+        if beam_size and 0 < beam_size < K:
+            keep = torch.topk(dp, beam_size).indices
+            m = torch.ones_like(dp, dtype=torch.bool); m[keep] = False
+            dp = dp.masked_fill(m, MASK_VALUE)
+        hist.append(dp.clone()); back.append(prev)
+    last = int(dp.argmax()); path=[last]
+    for bp in reversed(back):
+        last = int(bp[last]); path.append(last)
     path.reverse()
-    return path, torch.stack(history)
+    return path, torch.stack(hist)
 
+def fixed_lag(E: Tensor, A: Tensor, lag: int, beam_size=None):
+    T, K = E.shape; path=[]; hist=[]
+    for t in range(T):
+        s = max(0, t-lag+1)
+        Aw = A[s:t] if A.numel() and t > s else torch.empty(0, K, K)
+        p, h = viterbi(E[s:t+1], Aw, beam_size)
+        path.append(p[-1]); hist.append(h[-1])
+    return path, torch.stack(hist)
 
-def confidence_from_scores(scores: Tensor, path: list[int], temperature: float) -> list[float]:
-    if not path:
-        return []
-    temp = max(float(temperature), 1.0e-6)
-    probs = torch.softmax(scores / temp, dim=-1)
-    return [float(probs[t, a].item()) for t, a in enumerate(path)]
+def forward_backward(E: Tensor, A: Tensor):
+    T, K = E.shape
+    la = torch.full_like(E, MASK_VALUE); lb = torch.zeros_like(E)
+    la[0] = E[0]
+    for t in range(1, T):
+        la[t] = E[t] + torch.logsumexp(la[t-1][:, None] + A[t-1], dim=0)
+    for t in range(T-2, -1, -1):
+        lb[t] = torch.logsumexp(A[t] + E[t+1][None, :] + lb[t+1][None, :], dim=1)
+    z = torch.logsumexp(la[-1], dim=0)
+    P = torch.exp(la + lb - z)
+    return P / P.sum(dim=1, keepdim=True).clamp_min(1e-12)
 
+def softmax_conf(scores: Tensor, path: list[int], temp: float):
+    P = torch.softmax(scores/max(temp,1e-6), dim=-1)
+    return [float(P[t,a]) for t,a in enumerate(path)], (-(P*torch.log(P.clamp_min(1e-12))).sum(1)).tolist()
 
-def decode_dataset(
-    dataset: list[EpisodeSample],
-    params: HMMParams,
-    transition_mode: str,
-    confidence_temperature: float,
-) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
+def margin(scores: Tensor, path: list[int]):
+    vals=[]
+    for t,a in enumerate(path):
+        r=scores[t].clone(); b=float(r[a]); r[a]=MASK_VALUE; vals.append(b-float(r.max()))
+    return vals
 
-    for sample in dataset:
-        emissions = compute_emission_scores(sample, params)
-        transitions = compute_transition_scores(sample, params, transition_mode)
-        path, score_history = viterbi_decode(emissions, transitions)
-        confidences = confidence_from_scores(score_history, path, confidence_temperature)
-
-        for t, action in enumerate(path):
-            gt_action = int(sample.gt_candidate_pos[t].item())
-            pred_edge_idx = int(sample.candidate_edge_idx[t, action].item()) if action < sample.num_candidates else -1
-
-            if sample.gt_edge_idx is not None:
-                gt_edge_idx = int(sample.gt_edge_idx[t].item())
-            elif 0 <= gt_action < sample.num_candidates:
-                gt_edge_idx = int(sample.candidate_edge_idx[t, gt_action].item())
+def decode_dataset(ds: list[Episode], p: HMMParams, cfg: dict[str,Any]):
+    rows=[]
+    trans_mode = str(deep_get(cfg,"decode.transition_mode","soft"))
+    dec_mode = str(deep_get(cfg,"decode.mode","offline"))
+    conf_mode = str(deep_get(cfg,"decode.confidence_mode","posterior"))
+    temp = float(deep_get(cfg,"decode.confidence_temperature",1.0))
+    lag = int(deep_get(cfg,"decode.fixed_lag",10))
+    beam = deep_get(cfg,"decode.beam_size",None)
+    for ep in ds:
+        E = emission_scores(ep,p); A = transition_scores(ep,p,trans_mode)
+        if dec_mode == "fixed_lag": path, hist = fixed_lag(E,A,lag,beam)
+        else: path, hist = viterbi(E,A,beam)
+        if conf_mode == "posterior" and A.numel() and dec_mode=="offline":
+            P = forward_backward(E,A); conf=[float(P[t,a]) for t,a in enumerate(path)]
+            ent = (-(P*torch.log(P.clamp_min(1e-12))).sum(1)).tolist()
+        else:
+            conf, ent = softmax_conf(hist,path,temp)
+        mar = margin(hist,path)
+        for t,a in enumerate(path):
+            gt=int(ep.gt_candidate_pos[t])
+            off = int(p.offroad_enabled and a >= ep.K)
+            pred = OFFROAD_EDGE_IDX if off else int(ep.candidate_edge_idx[t,a]) if a < ep.K else -1
+            if ep.gt_edge_idx is not None: gt_edge=int(ep.gt_edge_idx[t])
+            elif 0 <= gt < ep.K: gt_edge=int(ep.candidate_edge_idx[t,gt])
+            else: gt_edge=-1
+            legal=True
+            if t>0 and not off and path[t-1] < ep.K and a < ep.K and ep.transition_mask.numel():
+                legal=bool(ep.transition_mask[t-1,path[t-1],a])
+            row = dict(trajectory_id=int(ep.trajectory_id), t=int(t), pred_candidate_pos=int(a),
+                       gt_candidate_pos=int(gt), pred_edge_idx=pred, gt_edge_idx=gt_edge,
+                       is_offroad_state=off, transition_legal=int(legal), confidence=float(conf[t]),
+                       entropy=float(ent[t]), second_best_margin=float(mar[t]),
+                       emission_score=float(E[t,a]) if a<E.shape[1] else np.nan,
+                       path_score=float(hist[t,a]) if a<hist.shape[1] else np.nan)
+            if ep.candidate_proj_xy is not None and not off and a < ep.K:
+                row["pred_proj_x"]=float(ep.candidate_proj_xy[t,a,0]); row["pred_proj_y"]=float(ep.candidate_proj_xy[t,a,1])
             else:
-                gt_edge_idx = -1
-
-            row = {
-                "trajectory_id": int(sample.trajectory_id),
-                "t": int(t),
-                "pred_candidate_pos": int(action),
-                "gt_candidate_pos": int(gt_action),
-                "pred_edge_idx": pred_edge_idx,
-                "gt_edge_idx": gt_edge_idx,
-                "confidence": float(confidences[t]) if t < len(confidences) else 0.0,
-                "emission_score": float(emissions[t, action].item()),
-                "path_score": float(score_history[t, action].item()),
-            }
-
-            if sample.candidate_proj_xy is not None and action < sample.num_candidates:
-                row["pred_proj_x"] = float(sample.candidate_proj_xy[t, action, 0].item())
-                row["pred_proj_y"] = float(sample.candidate_proj_xy[t, action, 1].item())
-
-            if sample.gt_proj_xy is not None:
-                row["gt_proj_x"] = float(sample.gt_proj_xy[t, 0].item())
-                row["gt_proj_y"] = float(sample.gt_proj_xy[t, 1].item())
-
+                row["pred_proj_x"]=np.nan; row["pred_proj_y"]=np.nan
+            if ep.gt_proj_xy is not None:
+                row["gt_proj_x"]=float(ep.gt_proj_xy[t,0]); row["gt_proj_y"]=float(ep.gt_proj_xy[t,1])
             rows.append(row)
-
     return pd.DataFrame(rows)
 
-
-def levenshtein(a: list[int], b: list[int]) -> int:
-    if len(a) < len(b):
-        a, b = b, a
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        curr = [i]
-        for j, cb in enumerate(b, start=1):
-            curr.append(min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + int(ca != cb)))
-        prev = curr
+def edit_distance(a,b):
+    if len(a)<len(b): a,b=b,a
+    prev=list(range(len(b)+1))
+    for i,ca in enumerate(a,1):
+        cur=[i]
+        for j,cb in enumerate(b,1): cur.append(min(prev[j]+1, cur[j-1]+1, prev[j-1]+(ca!=cb)))
+        prev=cur
     return prev[-1]
 
+def evaluate(df: pd.DataFrame, cfg: dict[str,Any]):
+    labelled=df[df.gt_edge_idx>=0].copy()
+    if bool(deep_get(cfg,"evaluation.require_gt_candidate",True)):
+        labelled=labelled[labelled.gt_candidate_pos>=0].copy()
+    labelled["edge_correct"]=labelled.pred_edge_idx.astype(int)==labelled.gt_edge_idx.astype(int)
+    labelled["action_correct"]=labelled.pred_candidate_pos.astype(int)==labelled.gt_candidate_pos.astype(int)
+    if {"pred_proj_x","pred_proj_y","gt_proj_x","gt_proj_y"}.issubset(labelled.columns):
+        labelled["projection_error_m"]=np.sqrt((labelled.pred_proj_x-labelled.gt_proj_x)**2+(labelled.pred_proj_y-labelled.gt_proj_y)**2)
+    else: labelled["projection_error_m"]=np.nan
+    th=float(deep_get(cfg,"evaluation.projection_threshold_m",10.0))
+    succ=float(deep_get(cfg,"evaluation.trajectory_success_accuracy",0.90))
+    for r in [2,5,10]: labelled[f"within_{r}m"]=labelled.projection_error_m<=r
+    labelled["projection_success"]=labelled.projection_error_m<=th
+    labelled["near_but_wrong_edge"]=(~labelled.edge_correct)&labelled.within_5m
+    labelled["severe_error"]=(~labelled.edge_correct)&(~labelled.within_10m)
+    labelled["low_confidence"]=labelled.confidence<0.35
+    traj=[]; edits=[]
+    for tid,g in labelled.groupby("trajectory_id"):
+        g=g.sort_values("t"); e=edit_distance(g.pred_edge_idx.astype(int).tolist(), g.gt_edge_idx.astype(int).tolist())
+        edits.append(e); acc=float(g.edge_correct.mean())
+        traj.append(dict(trajectory_id=int(tid), points=int(len(g)), edge_accuracy=acc,
+                         action_accuracy=float(g.action_correct.mean()), mean_projection_error_m=float(g.projection_error_m.mean()),
+                         within_5m_rate=float(g.within_5m.mean()), mean_confidence=float(g.confidence.mean()),
+                         mean_entropy=float(g.entropy.mean()), path_edit_distance=int(e), success=bool(acc>=succ)))
+    traj_df=pd.DataFrame(traj); errors=labelled[~labelled.edge_correct].copy(); trans=labelled[labelled.t>0]
+    metrics=dict(
+        num_points=int(len(df)), num_labelled_points=int(len(labelled)), num_unlabelled_or_gt_missing_points=int(len(df)-len(labelled)),
+        num_trajectories=int(labelled.trajectory_id.nunique()), point_action_accuracy=float(labelled.action_correct.mean()),
+        point_edge_accuracy=float(labelled.edge_correct.mean()), mean_projection_error_m=float(labelled.projection_error_m.mean()),
+        median_projection_error_m=float(labelled.projection_error_m.median()), p90_projection_error_m=float(labelled.projection_error_m.quantile(.9)),
+        within_2m_rate=float(labelled.within_2m.mean()), within_5m_rate=float(labelled.within_5m.mean()), within_10m_rate=float(labelled.within_10m.mean()),
+        projection_success_rate=float(labelled.projection_success.mean()), mean_confidence=float(labelled.confidence.mean()),
+        mean_entropy=float(labelled.entropy.mean()), mean_second_best_margin=float(labelled.second_best_margin.mean()),
+        pred_transition_legal_rate=float(trans.transition_legal.mean()) if len(trans) else 1.0,
+        offroad_state_rate=float(labelled.is_offroad_state.mean()) if "is_offroad_state" in labelled else 0.0,
+        path_edit_distance_mean=float(np.mean(edits)), path_edit_distance_median=float(np.median(edits)),
+        trajectory_success_rate=float(traj_df.success.mean()), num_error_points=int((~labelled.edge_correct).sum()),
+        error_near_but_wrong_edge_rate=float(errors.near_but_wrong_edge.mean()) if len(errors) else 0.0,
+        error_severe_rate=float(errors.severe_error.mean()) if len(errors) else 0.0,
+        low_confidence_error_rate=float(errors.low_confidence.mean()) if len(errors) else 0.0)
+    return metrics,traj_df,errors
 
-def evaluate_matches(
-    matches: pd.DataFrame,
-    projection_threshold_m: float,
-    trajectory_success_accuracy: float,
-    require_gt_candidate: bool,
-) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    df = matches.copy()
+def run_check(cfg):
+    for sp in ["train","val","test"]:
+        ds=load_dataset(Path(deep_get(cfg,f"paths.{sp}_dataset"))); print(f"[OK] {sp}: {dataset_summary(ds)}", flush=True)
 
-    labelled = df[df["gt_edge_idx"] >= 0].copy()
-    if require_gt_candidate:
-        labelled = labelled[labelled["gt_candidate_pos"] >= 0].copy()
+def run_decode(cfg, split):
+    ds=load_dataset(Path(deep_get(cfg,f"paths.{split}_dataset"))); p=params_from_config(cfg)
+    df=decode_dataset(ds,p,cfg); out=Path(deep_get(cfg,"paths.match_dir","HMM/outputs/matches"))/f"hmm_matches_{split}.parquet"
+    out.parent.mkdir(parents=True, exist_ok=True); df.to_parquet(out,index=False); print(f"[OK] Decoded {split}: {out}", flush=True); return out
 
-    if len(labelled) == 0:
-        raise RuntimeError("No labelled points found.")
-
-    labelled["edge_correct"] = labelled["pred_edge_idx"].astype(int) == labelled["gt_edge_idx"].astype(int)
-    labelled["action_correct"] = labelled["pred_candidate_pos"].astype(int) == labelled["gt_candidate_pos"].astype(int)
-
-    if {"pred_proj_x", "pred_proj_y", "gt_proj_x", "gt_proj_y"}.issubset(labelled.columns):
-        labelled["projection_error_m"] = np.sqrt(
-            (labelled["pred_proj_x"] - labelled["gt_proj_x"]) ** 2
-            + (labelled["pred_proj_y"] - labelled["gt_proj_y"]) ** 2
-        )
-    else:
-        labelled["projection_error_m"] = np.nan
-
-    labelled["projection_success"] = labelled["projection_error_m"] <= projection_threshold_m
-    labelled["within_2m"] = labelled["projection_error_m"] <= 2.0
-    labelled["within_5m"] = labelled["projection_error_m"] <= 5.0
-    labelled["within_10m"] = labelled["projection_error_m"] <= 10.0
-    labelled["near_but_wrong_edge"] = (~labelled["edge_correct"]) & labelled["within_5m"]
-
-    trajectory_rows: list[dict[str, Any]] = []
-    path_edits = []
-
-    for tid, g in labelled.groupby("trajectory_id"):
-        g = g.sort_values("t")
-        pred_seq = g["pred_edge_idx"].astype(int).tolist()
-        gt_seq = g["gt_edge_idx"].astype(int).tolist()
-        edit = levenshtein(pred_seq, gt_seq)
-        edge_acc = float(g["edge_correct"].mean())
-        path_edits.append(edit)
-
-        trajectory_rows.append(
-            {
-                "trajectory_id": int(tid),
-                "points": int(len(g)),
-                "edge_accuracy": edge_acc,
-                "action_accuracy": float(g["action_correct"].mean()),
-                "mean_projection_error_m": float(g["projection_error_m"].mean()),
-                "within_5m_rate": float(g["within_5m"].mean()),
-                "path_edit_distance": int(edit),
-                "success": bool(edge_acc >= trajectory_success_accuracy),
-            }
-        )
-
-    trajectory_df = pd.DataFrame(trajectory_rows)
-    error_cases = labelled[~labelled["edge_correct"]].copy()
-
-    metrics = {
-        "num_points": int(len(df)),
-        "num_labelled_points": int(len(labelled)),
-        "num_unlabelled_or_gt_missing_points": int(len(df) - len(labelled)),
-        "num_trajectories": int(labelled["trajectory_id"].nunique()),
-        "point_action_accuracy": float(labelled["action_correct"].mean()),
-        "point_edge_accuracy": float(labelled["edge_correct"].mean()),
-        "mean_projection_error_m": float(labelled["projection_error_m"].mean()),
-        "median_projection_error_m": float(labelled["projection_error_m"].median()),
-        "p90_projection_error_m": float(labelled["projection_error_m"].quantile(0.90)),
-        "within_2m_rate": float(labelled["within_2m"].mean()),
-        "within_5m_rate": float(labelled["within_5m"].mean()),
-        "within_10m_rate": float(labelled["within_10m"].mean()),
-        "projection_success_rate": float(labelled["projection_success"].mean()),
-        "mean_confidence": float(labelled["confidence"].mean()) if "confidence" in labelled.columns else float("nan"),
-        "path_edit_distance_mean": float(np.mean(path_edits)),
-        "path_edit_distance_median": float(np.median(path_edits)),
-        "trajectory_success_rate": float(trajectory_df["success"].mean()),
-        "num_error_points": int((~labelled["edge_correct"]).sum()),
-        "error_near_but_wrong_edge_rate": float(error_cases["near_but_wrong_edge"].mean()) if len(error_cases) else 0.0,
-    }
-
-    return metrics, trajectory_df, error_cases
-
-
-def product_grid(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
-    keys = list(grid.keys())
-    values = [grid[k] for k in keys]
-    return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
-
-
-def params_with_overrides(base: HMMParams, overrides: dict[str, Any]) -> HMMParams:
-    values = asdict(base)
-    values.update(overrides)
-    return HMMParams(**values)
-
-
-def run_check(config: dict[str, Any]) -> None:
-    for split in ["train", "val", "test"]:
-        dataset = load_dataset(Path(deep_get(config, f"paths.{split}_dataset")))
-        print(f"[OK] {split}: {dataset_summary(dataset)}", flush=True)
-
-
-def run_decode(config: dict[str, Any], split: str, params: HMMParams | None = None) -> Path:
-    dataset = load_dataset(Path(deep_get(config, f"paths.{split}_dataset")))
-    params = params or params_from_config(config)
-
-    matches = decode_dataset(
-        dataset=dataset,
-        params=params,
-        transition_mode=str(deep_get(config, "decode.transition_mode", "soft")),
-        confidence_temperature=float(deep_get(config, "decode.confidence_temperature", 1.0)),
-    )
-
-    match_dir = Path(deep_get(config, "paths.match_dir", "HMM/outputs/matches"))
-    ensure_dir(match_dir)
-    out = match_dir / f"hmm_matches_{split}.parquet"
-    matches.to_parquet(out, index=False)
-    print(f"[OK] Decoded {split}: {out}", flush=True)
-    return out
-
-
-def run_evaluate(config: dict[str, Any], split: str) -> dict[str, Any]:
-    match_path = Path(deep_get(config, "paths.match_dir", "HMM/outputs/matches")) / f"hmm_matches_{split}.parquet"
-    if not match_path.exists():
-        raise FileNotFoundError(f"Missing matches file. Run decode first: {match_path}")
-
-    matches = pd.read_parquet(match_path)
-
-    metrics, trajectories, errors = evaluate_matches(
-        matches,
-        projection_threshold_m=float(deep_get(config, "evaluation.projection_threshold_m", 10.0)),
-        trajectory_success_accuracy=float(deep_get(config, "evaluation.trajectory_success_accuracy", 0.90)),
-        require_gt_candidate=bool(deep_get(config, "evaluation.require_gt_candidate", True)),
-    )
-
-    metric_dir = Path(deep_get(config, "paths.metric_dir", "HMM/outputs/metrics"))
-    ensure_dir(metric_dir)
-
-    metric_path = metric_dir / f"hmm_metrics_{split}.json"
-    traj_path = metric_dir / f"hmm_trajectory_metrics_{split}.csv"
-    error_path = metric_dir / f"hmm_error_cases_{split}.csv"
-
-    with metric_path.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(metrics, f, indent=2)
-
-    trajectories.to_csv(traj_path, index=False)
-    errors.to_csv(error_path, index=False)
-
+def run_evaluate(cfg, split):
+    mp=Path(deep_get(cfg,"paths.match_dir","HMM/outputs/matches"))/f"hmm_matches_{split}.parquet"
+    if not mp.exists(): raise FileNotFoundError(f"Run decode first: {mp}")
+    metrics,traj,errors=evaluate(pd.read_parquet(mp),cfg); md=Path(deep_get(cfg,"paths.metric_dir","HMM/outputs/metrics")); md.mkdir(parents=True,exist_ok=True)
+    (md/f"hmm_metrics_{split}.json").write_text(json.dumps(metrics,indent=2),encoding="utf-8",newline="\n")
+    traj.to_csv(md/f"hmm_trajectory_metrics_{split}.csv",index=False); errors.to_csv(md/f"hmm_error_cases_{split}.csv",index=False)
     print("[OK] HMM evaluation complete", flush=True)
-    for key, value in metrics.items():
-        print(f"{key}: {value}", flush=True)
-
+    for k,v in metrics.items(): print(f"{k}: {v}", flush=True)
     return metrics
 
+def grid_product(grid):
+    keys=list(grid); return [dict(zip(keys,c)) for c in itertools.product(*[grid[k] for k in keys])]
 
-def run_tune(config: dict[str, Any]) -> None:
-    split = str(deep_get(config, "grid_search.split", "val"))
-    dataset = load_dataset(Path(deep_get(config, f"paths.{split}_dataset")))
-
-    base_params = params_from_config(config)
-
-    grid_config = deep_get(config, "grid_search", {})
-    ignored = {"split", "max_trials"}
-    grid = {k: v for k, v in grid_config.items() if k not in ignored and isinstance(v, list)}
-
-    trials = product_grid(grid)
-    random.seed(int(deep_get(config, "project.seed", 42)))
-    random.shuffle(trials)
-
-    max_trials = deep_get(config, "grid_search.max_trials", None)
-    if max_trials is not None:
-        trials = trials[: int(max_trials)]
-
-    metric_dir = Path(deep_get(config, "paths.metric_dir", "HMM/outputs/metrics"))
-    ensure_dir(metric_dir)
-
-    rows: list[dict[str, Any]] = []
-    best: dict[str, Any] | None = None
-    best_score = -1.0
-
-    for idx, overrides in enumerate(trials, start=1):
-        params = params_with_overrides(base_params, overrides)
-        matches = decode_dataset(
-            dataset=dataset,
-            params=params,
-            transition_mode=str(deep_get(config, "decode.transition_mode", "soft")),
-            confidence_temperature=float(deep_get(config, "decode.confidence_temperature", 1.0)),
-        )
-        metrics, _, _ = evaluate_matches(
-            matches,
-            projection_threshold_m=float(deep_get(config, "evaluation.projection_threshold_m", 10.0)),
-            trajectory_success_accuracy=float(deep_get(config, "evaluation.trajectory_success_accuracy", 0.90)),
-            require_gt_candidate=bool(deep_get(config, "evaluation.require_gt_candidate", True)),
-        )
-
-        score = float(metrics["point_edge_accuracy"])
-        rows.append({"trial": idx, **overrides, **metrics})
-
-        print(f"[grid] {idx}/{len(trials)} point_edge_accuracy={score:.6f}", flush=True)
-
-        if score > best_score:
-            best_score = score
-            best = {
-                "params": asdict(params),
-                "overrides": overrides,
-                "metrics": metrics,
-            }
-
-    pd.DataFrame(rows).to_csv(metric_dir / "hmm_grid_search.csv", index=False)
-
-    with (metric_dir / "hmm_best_params.json").open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(best or {}, f, indent=2)
-
+def run_tune(cfg):
+    split=str(deep_get(cfg,"grid_search.split","val")); ds=load_dataset(Path(deep_get(cfg,f"paths.{split}_dataset")))
+    base=asdict(params_from_config(cfg)); gcfg=deep_get(cfg,"grid_search",{})
+    grid={k:v for k,v in gcfg.items() if k not in {"split","max_trials"} and isinstance(v,list)}
+    trials=grid_product(grid); random.seed(int(deep_get(cfg,"project.seed",42))); random.shuffle(trials)
+    mt=deep_get(cfg,"grid_search.max_trials",None); trials=trials[:int(mt)] if mt else trials
+    rows=[]; best=None; best_score=-1
+    for i,ov in enumerate(trials,1):
+        pp=HMMParams(**{**base,**ov}); df=decode_dataset(ds,pp,cfg); metrics,_,_=evaluate(df,cfg); score=float(metrics["point_edge_accuracy"])
+        rows.append({"trial":i,**ov,**metrics}); print(f"[grid] {i}/{len(trials)} point_edge_accuracy={score:.6f}", flush=True)
+        if score>best_score: best_score=score; best={"params":asdict(pp),"overrides":ov,"metrics":metrics}
+    md=Path(deep_get(cfg,"paths.metric_dir","HMM/outputs/metrics")); md.mkdir(parents=True,exist_ok=True)
+    pd.DataFrame(rows).to_csv(md/"hmm_grid_search.csv",index=False); (md/"hmm_best_params.json").write_text(json.dumps(best or {},indent=2),encoding="utf-8",newline="\n")
     print(f"[OK] HMM grid tuning complete. Best point_edge_accuracy={best_score:.6f}", flush=True)
 
+def run_make_tuned(cfg):
+    bp=Path(deep_get(cfg,"paths.metric_dir","HMM/outputs/metrics"))/"hmm_best_params.json"
+    if not bp.exists(): raise FileNotFoundError(f"Run tune first: {bp}")
+    best=json.loads(bp.read_text(encoding="utf-8")); params=best.get("params",{})
+    out=dict(cfg); out["emission"]=dict(cfg.get("emission",{})); out["transition"]=dict(cfg.get("transition",{})); out["offroad"]=dict(cfg.get("offroad",{})); out.setdefault("decode",{})["split"]="test"
+    em_keys={"emission_scale","distance_weight","log_distance_weight","yaw_weight","rank_weight","speed_consistency_weight","oneway_weight","road_class_prior_weight","candidate_density_weight","yaw_reliability_weight","adaptive_sigma_enabled","sigma_base","sigma_min","sigma_max","sigma_speed_weight","sigma_ambiguity_weight","sigma_yaw_unreliable_weight"}
+    tr_keys={"transition_scale","legal_bonus","illegal_penalty","same_edge_bonus","same_osm_way_bonus","same_road_class_bonus","route_distance_weight","route_gps_ratio_weight","route_minus_gps_weight","turn_weight","yaw_change_weight","uturn_penalty","sharp_turn_speed_weight","time_feasible_bonus","time_infeasible_penalty","rank_delta_weight","distance_delta_weight"}
+    for k,v in params.items():
+        if k in em_keys: out["emission"][k]=v
+        elif k in tr_keys: out["transition"][k]=v
+    save_yaml(Path("HMM/configs/hmm_tuned.yaml"),out); print("[OK] Wrote HMM/configs/hmm_tuned.yaml", flush=True)
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Single-file classical HMM/Viterbi workflow for One-Direction.")
-    parser.add_argument("stage", nargs="?", default="all", choices=["check", "decode", "evaluate", "all", "tune"])
-    parser.add_argument("--config", type=Path, default=Path("HMM/configs/hmm_default.yaml"))
-    parser.add_argument("--split", choices=["train", "val", "test"], default=None)
-    parser.add_argument("--override", nargs="*", default=[])
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    config = apply_overrides(load_config(args.config), args.override)
-    split = args.split or str(deep_get(config, "decode.split", "test"))
-
-    if args.stage == "check":
-        run_check(config)
-    elif args.stage == "decode":
-        run_decode(config, split)
-    elif args.stage == "evaluate":
-        run_evaluate(config, split)
-    elif args.stage == "all":
-        run_check(config)
-        run_decode(config, split)
-        run_evaluate(config, split)
-    elif args.stage == "tune":
-        run_tune(config)
-    else:
-        raise ValueError(args.stage)
-
+def main():
+    ap=argparse.ArgumentParser(description="Single-file SOTA-style HMM/Viterbi workflow for One-Direction.")
+    ap.add_argument("stage", nargs="?", default="all", choices=["check","decode","evaluate","all","tune","make-tuned-config"])
+    ap.add_argument("--config", type=Path, default=Path("HMM/configs/hmm_default.yaml"))
+    ap.add_argument("--split", choices=["train","val","test"], default=None)
+    ap.add_argument("--override", nargs="*", default=[])
+    args=ap.parse_args(); cfg=apply_overrides(load_yaml(args.config),args.override); split=args.split or str(deep_get(cfg,"decode.split","test"))
+    if args.stage=="check": run_check(cfg)
+    elif args.stage=="decode": run_decode(cfg,split)
+    elif args.stage=="evaluate": run_evaluate(cfg,split)
+    elif args.stage=="all": run_check(cfg); run_decode(cfg,split); run_evaluate(cfg,split)
+    elif args.stage=="tune": run_tune(cfg)
+    elif args.stage=="make-tuned-config": run_make_tuned(cfg)
     return 0
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     raise SystemExit(main())

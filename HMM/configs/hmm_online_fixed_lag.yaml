@@ -10,15 +10,15 @@ paths:
   report_dir: HMM/outputs/reports
 decode:
   split: test
-  mode: offline
-  fixed_lag: 10
+  mode: fixed_lag
+  fixed_lag: 15
   beam_size: null
   transition_mode: soft
   confidence_temperature: 1.0
   confidence_mode: posterior
 emission:
   emission_scale: 1.0
-  distance_weight: 3.0
+  distance_weight: 4.0
   log_distance_weight: 0.8
   yaw_weight: 1.2
   rank_weight: 1.2
@@ -35,7 +35,7 @@ emission:
   sigma_ambiguity_weight: 0.40
   sigma_yaw_unreliable_weight: 0.30
 transition:
-  transition_scale: 0.35
+  transition_scale: 0.25
   legal_bonus: 0.35
   illegal_penalty: 2.0
   same_edge_bonus: 0.35

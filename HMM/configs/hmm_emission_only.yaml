@@ -1,6 +1,5 @@
 project:
   seed: 42
-
 paths:
   train_dataset: data/processed/tensors/train_dataset.pt
   val_dataset: data/processed/tensors/val_dataset.pt
@@ -9,12 +8,14 @@ paths:
   match_dir: HMM/outputs/matches
   metric_dir: HMM/outputs/metrics
   report_dir: HMM/outputs/reports
-
 decode:
   split: test
+  mode: offline
+  fixed_lag: 10
+  beam_size: null
   transition_mode: none
   confidence_temperature: 1.0
-
+  confidence_mode: softmax
 emission:
   emission_scale: 1.0
   distance_weight: 3.0
@@ -23,31 +24,58 @@ emission:
   rank_weight: 1.2
   speed_consistency_weight: 0.15
   oneway_weight: 0.05
+  road_class_prior_weight: 0.15
+  candidate_density_weight: 0.10
   yaw_reliability_weight: 0.35
-  bias: 0.0
-
+  adaptive_sigma_enabled: true
+  sigma_base: 0.35
+  sigma_min: 0.20
+  sigma_max: 2.50
+  sigma_speed_weight: 0.30
+  sigma_ambiguity_weight: 0.40
+  sigma_yaw_unreliable_weight: 0.30
 transition:
   transition_scale: 0.0
-  legal_bonus: 0.0
-  illegal_penalty: 0.0
-  same_edge_bonus: 0.0
-  same_osm_way_bonus: 0.0
-  same_road_class_bonus: 0.0
-  route_distance_weight: 0.0
-  route_gps_ratio_weight: 0.0
-  route_minus_gps_weight: 0.0
-  turn_weight: 0.0
-  yaw_change_weight: 0.0
-  time_feasible_bonus: 0.0
-  time_infeasible_penalty: 0.0
-  rank_delta_weight: 0.0
-  distance_delta_weight: 0.0
-
+  legal_bonus: 0.35
+  illegal_penalty: 2.0
+  same_edge_bonus: 0.35
+  same_osm_way_bonus: 0.15
+  same_road_class_bonus: 0.05
+  route_distance_weight: 0.25
+  route_gps_ratio_weight: 0.10
+  route_minus_gps_weight: 0.15
+  turn_weight: 0.10
+  yaw_change_weight: 0.05
+  uturn_penalty: 0.50
+  sharp_turn_speed_weight: 0.25
+  time_feasible_bonus: 0.10
+  time_infeasible_penalty: 0.50
+  rank_delta_weight: 0.05
+  distance_delta_weight: 0.05
+offroad:
+  enabled: false
+  emission_bias: -5.0
+  enter_penalty: 3.0
+  exit_penalty: 2.0
+  stay_bonus: 0.5
 evaluation:
   projection_threshold_m: 10.0
   trajectory_success_accuracy: 0.90
   require_gt_candidate: true
-
 grid_search:
   split: val
-  max_trials: 1
+  emission_scale: [1.0]
+  transition_scale: [0.0, 0.15, 0.25, 0.35, 0.50]
+  distance_weight: [2.0, 3.0, 4.0, 5.0]
+  log_distance_weight: [0.0, 0.5, 0.8]
+  yaw_weight: [0.5, 1.0, 1.5]
+  rank_weight: [0.7, 1.2, 1.8]
+  sigma_base: [0.25, 0.35, 0.50]
+  legal_bonus: [0.0, 0.2, 0.35, 0.5]
+  illegal_penalty: [0.0, 1.0, 2.0, 4.0]
+  same_edge_bonus: [0.0, 0.2, 0.35, 0.5]
+  same_osm_way_bonus: [0.0, 0.1, 0.2]
+  route_distance_weight: [0.0, 0.15, 0.25, 0.5]
+  route_minus_gps_weight: [0.0, 0.10, 0.20]
+  uturn_penalty: [0.0, 0.25, 0.50]
+  max_trials: 250

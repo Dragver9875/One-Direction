@@ -73,13 +73,6 @@ class HMMParams:
     time_infeasible_penalty: float = 0.50
     rank_delta_weight: float = 0.05
     distance_delta_weight: float = 0.05
-    dynamic_transition_enabled: bool = False
-    dynamic_transition_min_gate: float = 0.50
-    dynamic_transition_max_gate: float = 1.50
-    dynamic_transition_entropy_weight: float = 0.60
-    dynamic_transition_margin_weight: float = 0.40
-    dynamic_transition_margin_temperature: float = 1.0
-
     offroad_enabled: bool = False
     offroad_emission_bias: float = -5.0
     offroad_enter_penalty: float = 3.0
@@ -503,6 +496,78 @@ def run_evaluate(cfg, split):
 def grid_product(grid):
     keys=list(grid); return [dict(zip(keys,c)) for c in itertools.product(*[grid[k] for k in keys])]
 
+
+def _calibration_bins(values, correct, bins=10, higher_is_better=True):
+    clean=pd.DataFrame({"value":values,"correct":correct.astype(float)}).replace([np.inf,-np.inf],np.nan).dropna()
+    if len(clean)==0: return []
+    if clean["value"].nunique()<=1:
+        return [{"bin":0,"lo":float(clean["value"].min()),"hi":float(clean["value"].max()),"count":int(len(clean)),"mean_value":float(clean["value"].mean()),"accuracy":float(clean["correct"].mean())}]
+    q=min(int(bins),int(clean["value"].nunique()))
+    clean["bin"]=pd.qcut(clean["value"],q=q,duplicates="drop")
+    rows=[]
+    for i,(interval,g) in enumerate(clean.groupby("bin",observed=True)):
+        rows.append({"bin":int(i),"lo":float(interval.left),"hi":float(interval.right),"count":int(len(g)),"mean_value":float(g["value"].mean()),"accuracy":float(g["correct"].mean())})
+    return sorted(rows,key=lambda r:r["lo"],reverse=not higher_is_better)
+
+def _ece(confidence, correct, bins=10):
+    df=pd.DataFrame({"confidence":confidence,"correct":correct.astype(float)}).replace([np.inf,-np.inf],np.nan).dropna()
+    if len(df)==0: return float("nan")
+    df["bin"]=pd.cut(df["confidence"],bins=np.linspace(0.0,1.0,bins+1),include_lowest=True)
+    ece=0.0
+    for _,g in df.groupby("bin",observed=True):
+        if len(g)==0: continue
+        ece+=(len(g)/len(df))*abs(float(g["confidence"].mean())-float(g["correct"].mean()))
+    return float(ece)
+
+def _threshold_report(df, score_col, higher_is_better, targets):
+    clean=df[[score_col,"edge_correct"]].replace([np.inf,-np.inf],np.nan).dropna()
+    if len(clean)==0: return []
+    values=sorted(clean[score_col].unique())
+    if len(values)>200: values=np.quantile(clean[score_col],np.linspace(0.0,1.0,200)).tolist()
+    rows=[]
+    for target in targets:
+        best=None
+        for threshold in values:
+            keep=clean[clean[score_col]>=threshold] if higher_is_better else clean[clean[score_col]<=threshold]
+            if len(keep)==0: continue
+            precision=float(keep["edge_correct"].mean()); coverage=float(len(keep)/len(clean))
+            if precision>=target:
+                cand={"target_precision":float(target),"threshold":float(threshold),"precision":precision,"coverage":coverage,"kept_points":int(len(keep))}
+                if best is None or cand["coverage"]>best["coverage"]: best=cand
+        if best is not None: rows.append(best)
+    return rows
+
+def run_calibrate(cfg, split):
+    run_decode(cfg,split)
+    mp=Path(deep_get(cfg,"paths.match_dir","HMM/outputs/matches"))/f"hmm_matches_{split}.parquet"
+    m=pd.read_parquet(mp)
+    labelled=m[m["gt_edge_idx"]>=0].copy()
+    if bool(deep_get(cfg,"evaluation.require_gt_candidate",True)): labelled=labelled[labelled["gt_candidate_pos"]>=0].copy()
+    if len(labelled)==0: raise RuntimeError("No labelled points found for calibration.")
+    labelled["edge_correct"]=labelled["pred_edge_idx"].astype(int)==labelled["gt_edge_idx"].astype(int)
+    if "entropy" not in labelled.columns: labelled["entropy"]=np.nan
+    if "second_best_margin" not in labelled.columns: labelled["second_best_margin"]=np.nan
+    report={
+        "split":split,
+        "num_points":int(len(m)),
+        "num_labelled_points":int(len(labelled)),
+        "accuracy":float(labelled["edge_correct"].mean()),
+        "confidence_ece_10":_ece(labelled["confidence"],labelled["edge_correct"],10),
+        "confidence_bins":_calibration_bins(labelled["confidence"],labelled["edge_correct"],10,True),
+        "margin_bins":_calibration_bins(labelled["second_best_margin"],labelled["edge_correct"],10,True),
+        "entropy_bins":_calibration_bins(labelled["entropy"],labelled["edge_correct"],10,False),
+        "confidence_thresholds":_threshold_report(labelled,"confidence",True,[0.60,0.70,0.80,0.90]),
+        "margin_thresholds":_threshold_report(labelled,"second_best_margin",True,[0.60,0.70,0.80,0.90]),
+        "entropy_thresholds":_threshold_report(labelled,"entropy",False,[0.60,0.70,0.80,0.90])
+    }
+    md=Path(deep_get(cfg,"paths.metric_dir","HMM/outputs/metrics")); md.mkdir(parents=True,exist_ok=True)
+    out=md/f"hmm_confidence_calibration_{split}.json"
+    out.write_text(json.dumps(report,indent=2),encoding="utf-8",newline="\n")
+    print(f"[OK] Wrote calibration report: {out}",flush=True)
+    print(f"accuracy: {report['accuracy']}",flush=True)
+    print(f"confidence_ece_10: {report['confidence_ece_10']}",flush=True)
+
+
 def run_tune(cfg):
     split=str(deep_get(cfg,"grid_search.split","val")); ds=load_dataset(Path(deep_get(cfg,f"paths.{split}_dataset")))
     base=asdict(params_from_config(cfg)); gcfg=deep_get(cfg,"grid_search",{})
@@ -532,7 +597,7 @@ def run_make_tuned(cfg):
 
 def main():
     ap=argparse.ArgumentParser(description="Single-file SOTA-style HMM/Viterbi workflow for One-Direction.")
-    ap.add_argument("stage", nargs="?", default="all", choices=["check","decode","evaluate","all","tune","make-tuned-config"])
+    ap.add_argument("stage", nargs="?", default="all", choices=["check","decode","evaluate","all","tune","make-tuned-config","calibrate"])
     ap.add_argument("--config", type=Path, default=Path("HMM/configs/hmm_default.yaml"))
     ap.add_argument("--split", choices=["train","val","test"], default=None)
     ap.add_argument("--override", nargs="*", default=[])
@@ -543,6 +608,7 @@ def main():
     elif args.stage=="all": run_check(cfg); run_decode(cfg,split); run_evaluate(cfg,split)
     elif args.stage=="tune": run_tune(cfg)
     elif args.stage=="make-tuned-config": run_make_tuned(cfg)
+    elif args.stage=="calibrate": run_calibrate(cfg,split)
     return 0
 
 if __name__=="__main__":

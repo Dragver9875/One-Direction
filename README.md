@@ -18,7 +18,7 @@ Output:
 
 Unlike a nearest-road matcher, One-Direction treats map matching as a **graph-structured sequence-decoding problem**. The OSM road network is converted into a directed road graph, then into an edge-centric line graph. A Graph Neural Network learns contextual road-segment embeddings, and a custom HMM/Viterbi decoder uses learned emission and transition scores to recover the most likely route.
 
-The current primary workflow is the **GNN-HMM pipeline**. The repository also contains experimental reinforcement-learning branches under `RL/` and `D-SAC/`, but these are treated as secondary research extensions and should be compared against the GNN-HMM baseline only after the GNN-HMM pipeline is fully trained and evaluated.
+The current repository now supports four comparable map-matching workflows: a tuned classical **HMM** baseline under `HMM/`, the learned **GNN-HMM + Viterbi** pipeline, **PPO + Asymmetric Privileged Learning** under `RL/`, and **Discrete SAC + Asymmetric Privileged Learning** under `D-SAC/`. Based on the latest route-overlap evaluation, the tuned HMM is the strongest current practical GPS-to-OSM snapping baseline, while GNN-HMM remains the primary learned graph-sequence model and the main neural baseline to improve.
 
 ---
 
@@ -144,17 +144,78 @@ Evaluation + visual debugging
 The intended workflow is:
 
 ```text
-Primary:
+Current strongest route-overlap baseline:
+    Tuned classical HMM
+
+Primary learned model:
     GNN-HMM + Viterbi
 
-Experimental:
+Experimental RL baseline:
     PPO + Asymmetric Privileged Learning
 
-Advanced experimental:
+Advanced experimental RL baseline:
     Discrete SAC + Asymmetric Privileged Learning
 ```
 
-The GNN-HMM pipeline should be treated as the main system because it performs explicit global sequence decoding over the candidate lattice.
+The tuned HMM should be treated as the current practical baseline for GPS-to-OSM snapping. The GNN-HMM pipeline should be treated as the primary learned system because it performs explicit global sequence decoding over the candidate lattice and is the model that must beat the tuned HMM to justify the additional neural complexity.
+
+---
+
+## Current performance snapshot
+
+The latest evaluation uses the Map Matching 2-style and exact route-overlap metrics added to the pipeline. The main practical question is:
+
+```text
+Given GPS points, how much of the correct route is recovered on the OSM map?
+```
+
+The current best route-overlap comparison at 5 m tolerance using projected-point fallback is:
+
+| Workflow | Weighted mean correct fraction | Mean correct fraction | Weighted symmetric overlap F1 | Weighted extra fraction | Weighted missed fraction | Trajectory success rate |
+|---|---:|---:|---:|---:|---:|---:|
+| Tuned HMM | **0.955294** | **0.944397** | **0.952358** | **0.050560** | **0.044706** | 0.750 |
+| GNN-HMM | 0.944478 | 0.943470 | 0.942343 | 0.059783 | 0.055522 | **0.775** |
+| D-SAC | 0.943439 | 0.939416 | 0.939756 | 0.063899 | 0.056561 | 0.750 |
+
+Interpretation:
+
+```text
+Tuned HMM recovers approximately 95.53% of the GT route length within 5 m.
+GNN-HMM recovers approximately 94.45% of the GT route length within 5 m.
+D-SAC recovers approximately 94.34% of the GT route length within 5 m.
+```
+
+The exact edge-ID metric is much stricter because it requires the predicted OSM edge ID to exactly match the GT OSM edge ID. It can count a prediction as wrong even when the snapped point is physically on the same road or within a few meters of the GT route.
+
+For GNN-HMM, the current Map Matching 2-style point/geometry metrics are:
+
+| Criterion | Weighted mean correct fraction | Trajectory success rate |
+|---|---:|---:|
+| Exact edge identity | 0.593852 | 0.075 |
+| Geometry within 2 m | 0.890587 | 0.625 |
+| Geometry within 5 m | 0.929234 | 0.775 |
+| Geometry within 10 m | 0.951440 | 0.825 |
+
+The expected practical performance for similar GPS traces is therefore:
+
+```text
+Physical OSM snapping within 5 m:
+    approximately 94–96% route-length correctness
+
+Physical OSM snapping within 2 m:
+    approximately 89–90% route-length correctness
+
+Exact OSM edge-ID match:
+    approximately 59% route-weighted correctness for the current GNN-HMM run
+```
+
+The important current conclusion is:
+
+```text
+The tuned HMM is the strongest practical route-overlap baseline.
+GNN-HMM is the strongest learned graph-sequence model.
+D-SAC is competitive with GNN-HMM at 5 m route-overlap tolerance.
+```
 
 ---
 
@@ -255,6 +316,11 @@ One-Direction/
 │   ├── 11_visualize_osm_overlay.py
 │   ├── 12_debug_gnn_hmm_data.py
 │   ├── 13_run_gnn_hmm_experiments.py
+│   ├── 14_evaluate_mm2_style.py
+│   ├── 15_compare_mm2_style.py
+│   ├── 16_evaluate_exact_mm2_route_overlap.py
+│   ├── 17_evaluate_geometry_overlap.py                  # optional Stage-B geometry-buffer evaluator
+│   ├── 18_evaluate_exact_mm2_route_overlap.py            # optional exact route-overlap evaluator variant
 │   └── run_project.py
 │
 ├── notebooks/
@@ -276,7 +342,13 @@ One-Direction/
 │   │   ├── gnn_hmm_metrics.json
 │   │   ├── trajectory_metrics.csv
 │   │   ├── error_cases.csv
-│   │   └── gnn_hmm_experiment_summary.csv
+│   │   ├── gnn_hmm_experiment_summary.csv
+│   │   ├── gnn_hmm_mm2_style_metrics_test.json
+│   │   ├── gnn_hmm_mm2_style_trajectory_test.csv
+│   │   ├── exact_mm2_route_overlap_comparison.csv
+│   │   ├── exact_mm2_route_overlap_comparison.json
+│   │   ├── mm2_style_comparison.csv
+│   │   └── mm2_style_comparison.json
 │   │
 │   ├── figures/
 │   │   ├── matched_paths.png
@@ -284,6 +356,25 @@ One-Direction/
 │   │   └── osm_overlay.html
 │   │
 │   └── run_logs/
+│
+├── HMM/
+│   ├── README.md
+│   ├── requirements-hmm.txt
+│   ├── pyproject.toml
+│   ├── .gitignore
+│   ├── configs/
+│   │   ├── hmm_default.yaml
+│   │   ├── hmm_emission_only.yaml
+│   │   ├── hmm_transition_light.yaml
+│   │   ├── hmm_online_fixed_lag.yaml
+│   │   ├── hmm_offroad_debug.yaml
+│   │   └── hmm_tuned.yaml
+│   ├── scripts/
+│   │   └── run_hmm.py
+│   └── outputs/
+│       ├── matches/
+│       ├── metrics/
+│       └── reports/
 │
 ├── RL/
 │   ├── README.md
@@ -896,6 +987,89 @@ illegal-transition errors
 GT/OSM alignment issues
 ```
 
+
+### 14.1 Metrics achieved so far
+
+The latest comparable route-overlap results show that the tuned HMM currently gives the best practical GPS-to-OSM snapping performance at 5 m route-overlap tolerance.
+
+```text
+Exact route-overlap at 5 m tolerance:
+    HMM      weighted_mean_correct_fraction = 0.955294
+    GNN-HMM  weighted_mean_correct_fraction = 0.944478
+    D-SAC    weighted_mean_correct_fraction = 0.943439
+```
+
+For GNN-HMM, the Map Matching 2-style point/geometry evaluator reports:
+
+```text
+edge_correct weighted_mean_correct_fraction        = 0.593852
+mm2_geometry_correct_2m weighted_mean_correct_fraction  = 0.890587
+mm2_geometry_correct_5m weighted_mean_correct_fraction  = 0.929234
+mm2_geometry_correct_10m weighted_mean_correct_fraction = 0.951440
+```
+
+For GNN-HMM, the exact route-overlap evaluator using projected-point fallback reports:
+
+```text
+2 m tolerance:
+    weighted_mean_correct_fraction = 0.899999
+    weighted_symmetric_overlap_f1  = 0.897623
+    trajectory_success_rate        = 0.700
+
+5 m tolerance:
+    weighted_mean_correct_fraction = 0.944478
+    weighted_symmetric_overlap_f1  = 0.942343
+    trajectory_success_rate        = 0.775
+```
+
+The interpretation is:
+
+```text
+The system is much stronger geometrically than it is under strict OSM edge-ID equality.
+Most strict edge-ID errors are near-road or same-road errors rather than catastrophic wrong-road matches.
+```
+
+### 14.2 Map Matching 2-style and exact route-overlap evaluation
+
+The current pipeline includes additional evaluation scripts:
+
+```text
+scripts/14_evaluate_mm2_style.py
+scripts/15_compare_mm2_style.py
+scripts/16_evaluate_exact_mm2_route_overlap.py
+```
+
+The Map Matching 2-style evaluator reports:
+
+```text
+mean_correct_fraction
+weighted_mean_correct_fraction
+mean_trajectory_weighted_correct_fraction
+trajectory_success_rate
+total_route_weight_m
+correct_route_weight_m
+```
+
+The exact route-overlap evaluator reports:
+
+```text
+weighted_mean_correct_fraction
+weighted_precision_overlap
+weighted_symmetric_overlap_f1
+weighted_iou_like_overlap
+weighted_extra_fraction
+weighted_missed_fraction
+trajectory_success_rate
+```
+
+The key metric for practical route recovery is:
+
+```text
+weighted_mean_correct_fraction
+```
+
+which measures the amount of GT route length recovered by the predicted route.
+
 ---
 
 ## 15. Visualization
@@ -968,42 +1142,75 @@ The project includes a unified runner:
 scripts/run_project.py
 ```
 
+The updated runner is designed so that the entire numbered pipeline from script `01` through script `16` runs when the following command is used from the repository root:
+
+```powershell
+python scriptsun_project.py
+```
+
+This includes:
+
+```text
+01_prepare_trajectories.py
+02_prepare_gt_routes.py
+03_build_osm_graph.py
+04_build_line_graph.py
+05_generate_candidates.py
+06_build_training_tensors.py
+07_train_gnn_hmm.py
+08_decode_gnn_hmm.py
+09_evaluate.py
+10_visualize_errors.py
+11_visualize_osm_overlay.py
+12_debug_gnn_hmm_data.py
+13_run_gnn_hmm_experiments.py
+14_evaluate_mm2_style.py
+15_compare_mm2_style.py
+16_evaluate_exact_mm2_route_overlap.py
+```
+
 The runner uses explicit stage-level command-line defaults. Training settings such as epoch count are controlled through `scripts/run_project.py` defaults or through a direct training command, not through `configs/local.yaml` unless script-level config support is later added.
 
 List available stages:
 
 ```powershell
-python scripts\run_project.py --list
+python scriptsun_project.py --list
 ```
 
-Dry-run full GNN-HMM pipeline:
+Dry-run the full 01–16 pipeline:
 
 ```powershell
-python scripts\run_project.py gpu_e2e --dry-run
+python scriptsun_project.py --dry-run
 ```
 
-Run full GNN-HMM pipeline:
+Run the full 01–16 pipeline:
 
 ```powershell
-python scripts\run_project.py gpu_e2e
+python scriptsun_project.py
 ```
 
 Run from a specific stage:
 
 ```powershell
-python scripts\run_project.py gpu_e2e --from-stage train
+python scriptsun_project.py all --from-stage train_gnn_hmm
 ```
 
 Run only data preparation:
 
 ```powershell
-python scripts\run_project.py data
+python scriptsun_project.py data
 ```
 
-Run only evaluation and visualization:
+Run only post-processing and standard evaluation:
 
 ```powershell
-python scripts\run_project.py post
+python scriptsun_project.py post
+```
+
+Run only Map Matching 2-style and route-overlap metrics:
+
+```powershell
+python scriptsun_project.py mm2
 ```
 
 ---
@@ -1175,7 +1382,7 @@ conda activate one-direction
 Or run with the environment Python directly:
 
 ```powershell
-E:\Anaconda3\envs\one-direction\python.exe scripts\run_project.py gpu_e2e
+E:\Anaconda3\envs\one-direction\python.exe scripts\run_project.py
 ```
 
 ### 18.2 Set geospatial environment variables
@@ -1198,7 +1405,7 @@ python -c "import src; print(src.__project__, src.__version__)"
 ### 18.4 Start end-to-end run
 
 ```powershell
-python scripts\run_project.py gpu_e2e
+python scripts\run_project.py
 ```
 
 ### 18.5 GPU safety note
@@ -1263,7 +1470,53 @@ Use this only for short diagnostic runs because it slows training.
 
 ---
 
-## 20. Experimental RL branch: PPO + Asymmetric Privileged Learning
+## 20. Classical HMM branch
+
+The classical HMM branch is located at:
+
+```text
+HMM/
+```
+
+This branch is currently the strongest route-overlap baseline. It uses handcrafted emission and transition scoring, Viterbi decoding, posterior confidence diagnostics, fixed-lag online-style decoding, optional off-road/map-error state logic, and tuned configuration support.
+
+Recommended commands:
+
+```powershell
+python HMM\scripts\run_hmm.py all --config HMM\configs\hmm_tuned.yaml --split test
+```
+
+Emission-only diagnostic:
+
+```powershell
+python HMM\scripts\run_hmm.py all --config HMM\configs\hmm_emission_only.yaml --split test
+```
+
+Transition-light diagnostic:
+
+```powershell
+python HMM\scripts\run_hmm.py all --config HMM\configs\hmm_transition_light.yaml --split test
+```
+
+Tune HMM on validation:
+
+```powershell
+python HMM\scripts\run_hmm.py tune --config HMM\configs\hmm_default.yaml
+python HMM\scripts\run_hmm.py make-tuned-config --config HMM\configs\hmm_default.yaml
+python HMM\scripts\run_hmm.py all --config HMM\configs\hmm_tuned.yaml --split test
+```
+
+Current 5 m route-overlap result:
+
+```text
+HMM weighted_mean_correct_fraction = 0.955294
+```
+
+This means the tuned HMM recovers approximately 95.53% of the GT route length within 5 m under the current exact route-overlap fallback evaluation.
+
+---
+
+## 21. Experimental RL branch: PPO + Asymmetric Privileged Learning
 
 The PPO branch is located at:
 
@@ -1347,7 +1600,7 @@ PPO is useful as a reinforcement-learning baseline, but it should not replace th
 
 ---
 
-## 21. Experimental RL branch: Discrete SAC + Asymmetric Privileged Learning
+## 22. Experimental RL branch: Discrete SAC + Asymmetric Privileged Learning
 
 The Discrete SAC branch is located at:
 
@@ -1418,16 +1671,17 @@ D-SAC is the advanced RL extension. It should be compared against PPO and GNN-HM
 
 ---
 
-## 22. Comparing GNN-HMM, PPO, and D-SAC
+## 23. Comparing HMM, GNN-HMM, PPO, and D-SAC
 
-The recommended comparison hierarchy is:
+The recommended comparison hierarchy is now:
 
 ```text
 1. Candidate Top-1 baseline
-2. GNN-HMM emission-only behavior
-3. GNN-HMM + Viterbi decoding
-4. PPO + Asymmetric Privileged Learning
-5. Discrete SAC + Asymmetric Privileged Learning
+2. Tuned classical HMM
+3. GNN-HMM emission-only behavior
+4. GNN-HMM + Viterbi decoding
+5. PPO + Asymmetric Privileged Learning
+6. Discrete SAC + Asymmetric Privileged Learning
 ```
 
 The main comparison dimensions are:
@@ -1441,18 +1695,39 @@ path_edit_distance
 trajectory_success_rate
 mean confidence
 error taxonomy
+Map Matching 2-style weighted mean correct fraction
+exact route-overlap weighted mean correct fraction
+weighted symmetric overlap F1
+weighted missed fraction
+weighted extra fraction
 ```
 
-The GNN-HMM should remain the primary model unless an RL branch improves both:
+Current 5 m exact route-overlap ranking:
+
+```text
+1. Tuned HMM
+   weighted_mean_correct_fraction = 0.955294
+
+2. GNN-HMM
+   weighted_mean_correct_fraction = 0.944478
+
+3. D-SAC
+   weighted_mean_correct_fraction = 0.943439
+```
+
+The GNN-HMM should remain the primary learned model unless an RL branch improves both:
 
 ```text
 1. local candidate/edge selection
 2. route-level sequence consistency
+3. route-overlap weighted mean correct fraction
 ```
+
+The tuned HMM should remain the practical baseline until a learned method reliably exceeds its route-overlap performance.
 
 ---
 
-## 23. Recommended development order
+## 24. Recommended development order
 
 ```text
 1. Prepare and inspect trajectory data.
@@ -1466,17 +1741,20 @@ The GNN-HMM should remain the primary model unless an RL branch improves both:
 9. Train the GNN-HMM.
 10. Decode with transition-aware Viterbi.
 11. Evaluate with exact, geometry-aware, same-way, and transition metrics.
-12. Visualize failure cases.
-13. Tune transition weight and illegal-transition penalty.
-14. Improve transition features and sequence-level constraints.
-15. Run PPO as an experimental RL baseline.
-16. Run D-SAC as an advanced experimental RL baseline.
-17. Compare all methods under the same evaluation script.
+12. Run Map Matching 2-style evaluation.
+13. Run exact route-overlap evaluation.
+14. Visualize failure cases.
+15. Tune transition weight and illegal-transition penalty.
+16. Tune and compare the classical HMM baseline.
+17. Improve transition features and sequence-level constraints.
+18. Run PPO as an experimental RL baseline.
+19. Run D-SAC as an advanced experimental RL baseline.
+20. Compare all methods under the same MM2-style and exact route-overlap scripts.
 ```
 
 ---
 
-## 24. Future extensions
+## 25. Future extensions
 
 Possible future extensions include:
 
@@ -1487,6 +1765,8 @@ CRF-style sequence-level training
 Differentiable Viterbi / soft dynamic programming
 Hard-negative mining for ambiguous candidates
 Shortest-path-based transition features
+Full routed-geometry export for exact MM2-style overlap
+Edge-table geometry validation and route reconstruction
 Synthetic route generation from OSM
 Pseudo-labelling large raw GPS datasets
 Online streaming map matching
@@ -1507,9 +1787,9 @@ The RL policy would then operate as a route-level reranker rather than learning 
 
 ---
 
-## 25. Final summary
+## 26. Final summary
 
-One-Direction is a graph-based neural map-matching system for mapping vehicle pose observations to OSM road segments.
+One-Direction is a graph-based map-matching system for mapping vehicle pose observations to OSM road segments. It now includes a tuned classical HMM baseline, a learned GNN-HMM sequence model, and reinforcement-learning extensions for PPO and D-SAC.
 
 It uses:
 
@@ -1521,6 +1801,7 @@ Learned emission scoring
 Learned transition scoring
 Custom HMM/Viterbi decoder
 Geometry-aware and topology-aware evaluation
+Tuned classical HMM baseline
 Experimental PPO and D-SAC reinforcement-learning branches
 ```
 
@@ -1540,4 +1821,4 @@ Use neural learning to improve road-segment and transition scoring,
 while preserving graph topology and sequence consistency through HMM decoding.
 ```
 
-The current recommended research direction is to keep **GNN-HMM + Viterbi** as the primary system, then use PPO and D-SAC as controlled experimental baselines or future hybrid reranking modules.
+The current recommended research direction is to keep the **tuned HMM** as the practical performance baseline, keep **GNN-HMM + Viterbi** as the primary learned model, and use PPO and D-SAC as controlled experimental baselines or future hybrid reranking modules. A learned method should be considered superior only if it improves both strict graph-level metrics and route-overlap weighted mean correct fraction against the tuned HMM.

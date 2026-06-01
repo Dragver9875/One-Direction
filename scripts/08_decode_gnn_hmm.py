@@ -20,6 +20,13 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def torch_load_trusted(path: Path, map_location):
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
 class RoadGNNEncoder(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, num_layers: int, dropout: float, gnn_type: str = "graphsage"):
         super().__init__()
@@ -165,16 +172,16 @@ def main() -> None:
     device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device))
     ensure_dir(args.output.parent)
 
-    graph = torch.load(args.line_graph, map_location="cpu")
+    graph = torch_load_trusted(args.line_graph, map_location="cpu")
     road_x = graph["x"].float().to(device)
     edge_index = graph["edge_index"].long().to(device)
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch_load_trusted(args.checkpoint, map_location=device)
     model = OneDirectionModel(
         ckpt["road_feat_dim"], ckpt["hidden_dim"], ckpt["emission_feat_dim"], ckpt["transition_feat_dim"], ckpt.get("gnn_type", "graphsage")
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
-    dataset = torch.load(args.dataset, map_location="cpu")
+    dataset = torch_load_trusted(args.dataset, map_location="cpu")
     with args.idx_to_edge_id.open("r", encoding="utf-8") as f:
         idx_to_edge_id = json.load(f)
 

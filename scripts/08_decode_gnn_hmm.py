@@ -21,6 +21,12 @@ def ensure_dir(path: Path) -> None:
 
 
 def torch_load_trusted(path: Path, map_location):
+    import os
+    import pathlib
+
+    if os.name != "nt":
+        pathlib.WindowsPath = pathlib.PosixPath
+
     try:
         return torch.load(path, map_location=map_location, weights_only=False)
     except TypeError:

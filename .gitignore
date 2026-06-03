@@ -244,3 +244,5 @@ mapviz_*.avi
 # Local IISc runner/config
 configs/map_data6_iisc.yaml
 run_iisc.sh
+scripts/08_decode_gnn_hmm.py.bak_windowspath_20260603_181755
+scripts/18_publish_matches_to_mapviz.py.bak_local_xy_20260603_182844

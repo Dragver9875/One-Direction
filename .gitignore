@@ -189,3 +189,58 @@ configs/local.yaml
 configs/local.yml
 configs/debug.yaml
 configs/debug.yml
+# ==============================================================================
+# IISc / map_data6 / Mapviz local deployment artifacts
+# ==============================================================================
+
+# Local Ubuntu/ROS helper environment
+.venv-iisc/
+run_iisc.sh.bak_*
+*.avi
+
+# Local ROS bag files and copied bag directories
+map_data6/
+map_data6_*.db3
+metadata.yaml
+
+# IISc-specific OSM/map files
+data/raw/osm/iisc_campus.osm
+data/raw/osm/iisc_campus.osm.*
+data/raw/osm/*iisc*.osm
+data/raw/osm/*IISc*.osm
+
+# IISc extracted GNSS / local trajectory files
+data/raw/trajectories/points.csv
+data/raw/trajectories/map_data6_points_wkt.csv
+data/raw/trajectories/*map_data6*.csv
+data/raw/trajectories/*iisc*.csv
+data/raw/trajectories/*IISc*.csv
+
+# IISc processed graph/candidate/tensor artifacts
+data/interim/trajectory_clean.parquet
+data/interim/empty_gt_routes.parquet
+data/processed/road_graph/
+data/processed/line_graph/
+data/processed/candidates/
+data/processed/splits/
+data/processed/tensors/infer_dataset.pt
+
+# IISc reports
+data/reports/map_data6_*.json
+data/reports/*iisc*.json
+data/reports/*IISc*.json
+
+# IISc / Mapviz outputs
+outputs/mapviz/
+outputs/matches/map_data6_*.parquet
+outputs/matches/*iisc*.parquet
+outputs/matches/*IISc*.parquet
+
+# Local Mapviz config or captures if accidentally copied into repo
+.mapviz_config
+.mapviz_config.*
+mapviz_*.avi
+
+# Local IISc runner/config
+configs/map_data6_iisc.yaml
+run_iisc.sh
